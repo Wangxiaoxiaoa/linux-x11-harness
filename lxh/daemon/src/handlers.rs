@@ -9,7 +9,7 @@ use crate::tools::{
 };
 use lxh_core::{Driver, LxhError, MouseButton};
 use lxh_driver::DefaultDriver;
-use lxh_preview::PreviewWindow;
+use lxh_preview::PreviewManager;
 use lxh_runtime::{Display, DisplayConfig, Runtime};
 use serde_json::{json, Value};
 use tokio::sync::{Mutex, RwLock};
@@ -18,7 +18,7 @@ pub struct DaemonState {
     pub runtime: Arc<Runtime>,
     pub displays: Arc<RwLock<HashMap<String, Arc<Mutex<Display>>>>>,
     pub drivers: Arc<RwLock<HashMap<String, Arc<dyn Driver>>>>,
-    pub previews: Arc<RwLock<HashMap<String, PreviewWindow>>>,
+    pub previews: Arc<PreviewManager>,
 }
 
 pub struct ClientSession {
@@ -64,17 +64,9 @@ pub async fn create_display(
     let driver = Arc::new(DefaultDriver::new(&display_str)?);
 
     if preview {
-        let title = format!(
-            "LXH {}",
-            args.name
-                .clone()
-                .or_else(|| session.client_name.clone())
-                .unwrap_or_else(|| "Agent".to_string())
-        );
-        if let Ok(preview) =
-            PreviewWindow::start(&display_str, &title, std::time::Duration::from_millis(100))
-        {
-            state.previews.write().await.insert(id.clone(), preview);
+        let title = preview_title(session, &args.name);
+        if let Err(e) = state.previews.open(&id, &display_str, &title) {
+            eprintln!("preview unavailable for {id}: {e}");
         }
     }
 
@@ -115,14 +107,43 @@ pub async fn destroy_display(
 ) -> Result<Value, LxhError> {
     let args: DisplayIdArgs = parse_args(args)?;
     let display = find_display(state, &args.display_id).await?;
+    state.previews.close(&args.display_id);
     display.lock().await.destroy().await?;
 
-    state.previews.write().await.remove(&args.display_id);
     state.displays.write().await.remove(&args.display_id);
     state.drivers.write().await.remove(&args.display_id);
     session.owned_displays.remove(&args.display_id);
 
     Ok(json!({ "success": true }))
+}
+
+pub async fn preview_open(
+    state: &DaemonState,
+    session: &ClientSession,
+    args: &Value,
+) -> Result<Value, LxhError> {
+    let args: DisplayIdArgs = parse_args(args)?;
+    let display = find_display(state, &args.display_id).await?;
+    let display_str = display.lock().await.display().to_string();
+    let title = preview_title(session, &None);
+    state
+        .previews
+        .open(&args.display_id, &display_str, &title)?;
+    Ok(json!({ "success": true }))
+}
+
+pub async fn preview_close(state: &DaemonState, args: &Value) -> Result<Value, LxhError> {
+    let args: DisplayIdArgs = parse_args(args)?;
+    state.previews.close(&args.display_id);
+    Ok(json!({ "success": true }))
+}
+
+fn preview_title(session: &ClientSession, name: &Option<String>) -> String {
+    let who = name
+        .clone()
+        .or_else(|| session.client_name.clone())
+        .unwrap_or_else(|| "Agent".to_string());
+    format!("LXH {who}")
 }
 
 pub async fn detach_display(state: &DaemonState, args: &Value) -> Result<Value, LxhError> {

@@ -28,8 +28,8 @@ Always follow this order:
 6. Destroy the display with `lxh_display_destroy`.
 
 Displays are headless Xvfb servers. A read-only preview window opens by default
-so the user can watch what the agent is doing; closing it does not affect the
-display.
+so the user can watch what the agent is doing. Closing it does not affect the
+display. The user can double-click a preview to zoom it.
 
 ## Key tools
 
@@ -38,6 +38,8 @@ display.
 - `lxh_display_create` — create an isolated display. Returns `display_id` and `display`.
 - `lxh_display_destroy` — destroy a display and everything inside it.
 - `lxh_display_info` — get resolution and app count.
+- `lxh_preview_open` — open (or reopen) the preview window for a display.
+- `lxh_preview_close` — close the preview window without touching the display.
 
 ### Apps
 

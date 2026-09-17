@@ -290,6 +290,16 @@ pub fn tool_definitions() -> Vec<Value> {
             "Get display metadata",
             serde_json::to_value(schema_for!(DisplayIdArgs)).unwrap(),
         ),
+        tool_def(
+            "lxh_preview_open",
+            "Open a preview window for a display if not already open",
+            serde_json::to_value(schema_for!(DisplayIdArgs)).unwrap(),
+        ),
+        tool_def(
+            "lxh_preview_close",
+            "Close the preview window for a display",
+            serde_json::to_value(schema_for!(DisplayIdArgs)).unwrap(),
+        ),
     ]
 }
 
@@ -305,7 +315,7 @@ mod tests {
     #[test]
     fn tool_definitions_has_expected_tools() {
         let defs = tool_definitions();
-        assert_eq!(defs.len(), 26, "expected 26 tool definitions");
+        assert_eq!(defs.len(), 28, "expected 28 tool definitions");
 
         let names: Vec<&str> = defs.iter().map(|d| d["name"].as_str().unwrap()).collect();
         assert!(names.contains(&"lxh_display_create"));
@@ -313,6 +323,8 @@ mod tests {
         assert!(names.contains(&"lxh_capture_screenshot"));
         assert!(names.contains(&"lxh_clipboard_get"));
         assert!(names.contains(&"lxh_window_set_frame"));
+        assert!(names.contains(&"lxh_preview_open"));
+        assert!(names.contains(&"lxh_preview_close"));
     }
 
     #[test]

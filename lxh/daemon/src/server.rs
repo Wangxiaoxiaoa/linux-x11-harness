@@ -3,6 +3,7 @@ use std::path::PathBuf;
 use std::sync::Arc;
 
 use lxh_core::LxhError;
+use lxh_preview::PreviewManager;
 use lxh_runtime::Runtime;
 use serde_json::{json, Value};
 use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
@@ -24,7 +25,7 @@ impl DaemonServer {
                 runtime,
                 displays: Arc::new(RwLock::new(HashMap::new())),
                 drivers: Arc::new(RwLock::new(HashMap::new())),
-                previews: Arc::new(RwLock::new(HashMap::new())),
+                previews: Arc::new(PreviewManager::new()),
             }),
             socket_path,
         }
@@ -165,6 +166,8 @@ async fn dispatch_tool_call(
         "lxh_clipboard_get" => handlers::clipboard_get(state, args).await,
         "lxh_clipboard_set" => handlers::clipboard_set(state, args).await,
         "lxh_display_info" => handlers::display_info(state, args).await,
+        "lxh_preview_open" => handlers::preview_open(state, session, args).await,
+        "lxh_preview_close" => handlers::preview_close(state, args).await,
         "lxh_get_window_state" => handlers::get_window_state(state, args).await,
         "lxh_get_desktop_overview" => handlers::get_desktop_overview(state, args).await,
         "lxh_set_value" => handlers::set_value(state, args).await,
@@ -174,9 +177,8 @@ async fn dispatch_tool_call(
 
 async fn cleanup_session(state: Arc<DaemonState>, session: &mut ClientSession) {
     let mut displays = state.displays.write().await;
-    let mut previews = state.previews.write().await;
     for id in session.owned_displays.drain() {
-        previews.remove(&id);
+        state.previews.close(&id);
         if let Some(display) = displays.remove(&id) {
             let _ = display.lock().await.destroy().await;
         }
