@@ -95,20 +95,6 @@ impl PreviewManager {
         let mut inner = self.inner.lock().unwrap();
         inner.remove(display_id);
     }
-
-    /// Whether a live preview window currently exists for `display_id`.
-    pub fn is_open(&self, display_id: &str) -> bool {
-        let mut inner = self.inner.lock().unwrap();
-        inner.prune_dead();
-        inner.windows.contains_key(display_id)
-    }
-
-    /// Stop every preview window.
-    pub fn stop_all(&self) {
-        let mut inner = self.inner.lock().unwrap();
-        inner.windows.clear();
-        inner.used_slots.clear();
-    }
 }
 
 impl Inner {
