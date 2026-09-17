@@ -50,7 +50,15 @@ impl Connection {
             "method": "tools/call",
             "params": { "name": name, "arguments": arguments }
         });
-        self.send(&req).await
+        let mut resp = self.send(&req).await;
+        // MCP wraps tool output as CallToolResult: result.content[0].text holds
+        // a JSON string. Unwrap it so tests can address the tool's own fields.
+        if let Some(text) = resp["result"]["content"][0]["text"].as_str() {
+            if let Ok(inner) = serde_json::from_str::<Value>(text) {
+                resp["result"] = inner;
+            }
+        }
+        resp
     }
 
     async fn create_display(&mut self) -> Value {
@@ -152,6 +160,29 @@ async fn tools_list_returns_all_tools() {
             "tool missing inputSchema: {tool}"
         );
     }
+}
+
+#[tokio::test]
+async fn tools_call_returns_mcp_content_envelope() {
+    let daemon = DaemonGuard::new().await;
+    let mut conn = daemon.connect().await;
+    conn.next_id += 1;
+    let req = json!({
+        "jsonrpc": "2.0",
+        "id": conn.next_id,
+        "method": "tools/call",
+        "params": { "name": "lxh_display_create", "arguments": {"preview": false} }
+    });
+    let resp = conn.send(&req).await;
+    let content = resp["result"]["content"].as_array().expect("content array");
+    assert_eq!(content[0]["type"], "text");
+    let text = content[0]["text"].as_str().expect("text string");
+    let inner: Value = serde_json::from_str(text).expect("text is JSON");
+    assert!(inner["display_id"].is_string());
+
+    let display_id = inner["display_id"].as_str().unwrap().to_string();
+    conn.call_tool("lxh_display_destroy", json!({"display_id": display_id}))
+        .await;
 }
 
 #[tokio::test]

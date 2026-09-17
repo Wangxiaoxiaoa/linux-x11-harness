@@ -89,7 +89,11 @@ async fn handle_client(
             }
         };
 
+        let is_notification = req.id.is_none();
         let resp = dispatch(&state, session, req).await;
+        if is_notification {
+            continue;
+        }
         let msg = serde_json::to_string(&resp)
             .map_err(|e| LxhError::InvalidArgument(format!("serialize failed: {e}")))?;
         write_half
@@ -120,7 +124,9 @@ async fn dispatch(state: &DaemonState, session: &mut ClientSession, req: Request
             }))
         }
         "tools/list" => Ok(json!({ "tools": handlers::tool_definitions() })),
-        "tools/call" => dispatch_tool_call(state, session, &req.params).await,
+        "tools/call" => dispatch_tool_call(state, session, &req.params)
+            .await
+            .map(tool_result),
         _ => Err(LxhError::InvalidArgument(format!(
             "unknown method: {}",
             req.method
@@ -131,6 +137,12 @@ async fn dispatch(state: &DaemonState, session: &mut ClientSession, req: Request
         Ok(value) => Response::result(req.id, value),
         Err(e) => Response::error(req.id, -32603, &e.to_string()),
     }
+}
+
+fn tool_result(value: Value) -> Value {
+    json!({
+        "content": [ { "type": "text", "text": value.to_string() } ]
+    })
 }
 
 async fn dispatch_tool_call(

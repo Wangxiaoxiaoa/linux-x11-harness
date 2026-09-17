@@ -110,6 +110,9 @@ async fn run_mcp(socket_path: PathBuf) {
         let executable = env::current_exe().expect("current exe");
         let mut cmd = tokio::process::Command::new(executable);
         cmd.arg("serve").arg("--socket").arg(&socket_path);
+        cmd.stdin(std::process::Stdio::null());
+        cmd.stdout(std::process::Stdio::null());
+        cmd.stderr(std::process::Stdio::null());
         let mut child = cmd.spawn().expect("spawn daemon");
 
         for _ in 0..50 {
@@ -131,12 +134,14 @@ async fn run_mcp(socket_path: PathBuf) {
         .expect("connect daemon");
 
     let (read_half, mut write_half) = stream.into_split();
-    let stdin_to_socket = forward(tokio::io::stdin(), &mut write_half);
-    let socket_to_stdout = forward(read_half, tokio::io::stdout());
 
-    stdin_to_socket.await;
+    // Forward both directions concurrently. Awaiting the stdin->socket
+    // direction before polling socket->stdout would deadlock interactive
+    // clients until stdin closes.
+    let to_stdout = tokio::spawn(forward(read_half, tokio::io::stdout()));
+    forward(tokio::io::stdin(), &mut write_half).await;
     let _ = write_half.shutdown().await;
-    socket_to_stdout.await;
+    let _ = to_stdout.await;
 }
 
 async fn forward<R, W>(mut reader: R, mut writer: W)
