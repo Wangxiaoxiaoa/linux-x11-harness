@@ -40,27 +40,3 @@ impl XvfbBackend {
         Ok(proc)
     }
 }
-
-pub struct XephyrBackend;
-
-impl XephyrBackend {
-    pub async fn start(display: &str, width: u32, height: u32) -> Result<ManagedProcess, LxhError> {
-        // Xephyr needs a parent display; inherit the daemon's DISPLAY rather
-        // than pointing it at the new nested display.
-        let proc = ManagedProcess::spawn(
-            "Xephyr",
-            &[
-                display,
-                "-screen",
-                &format!("{}x{}", width, height),
-                "-ac",
-                "-br",
-                "-noreset",
-            ],
-            &[],
-        )
-        .await?;
-        wait_for_xconnect(display).await?;
-        Ok(proc)
-    }
-}

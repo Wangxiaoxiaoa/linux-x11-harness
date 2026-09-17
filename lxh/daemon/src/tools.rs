@@ -5,13 +5,6 @@ use serde_json::{json, Value};
 
 #[derive(Debug, Deserialize, JsonSchema)]
 #[serde(rename_all = "lowercase")]
-pub enum BackendArg {
-    Xvfb,
-    Xephyr,
-}
-
-#[derive(Debug, Deserialize, JsonSchema)]
-#[serde(rename_all = "lowercase")]
 pub enum ButtonArg {
     Left,
     Right,
@@ -20,8 +13,6 @@ pub enum ButtonArg {
 
 #[derive(Debug, Deserialize, JsonSchema)]
 pub struct DisplayCreateArgs {
-    #[serde(default)]
-    pub backend: Option<BackendArg>,
     #[serde(default)]
     pub persistent: bool,
     #[serde(default)]
@@ -171,7 +162,7 @@ pub fn tool_definitions() -> Vec<Value> {
     vec![
         tool_def(
             "lxh_display_create",
-            "Create a new X11 display (backend: xvfb or xephyr). Set persistent to keep it after disconnect.",
+            "Create a new X11 display. Set persistent to keep it after disconnect.",
             serde_json::to_value(schema_for!(DisplayCreateArgs)).unwrap(),
         ),
         tool_def(
@@ -341,13 +332,11 @@ mod tests {
 
     #[test]
     fn parse_display_create_args() {
-        let args = json!({"backend": "xephyr", "persistent": true});
+        let args = json!({"persistent": true});
         let parsed = parse_args::<DisplayCreateArgs>(&args).unwrap();
-        assert!(matches!(parsed.backend, Some(BackendArg::Xephyr)));
         assert!(parsed.persistent);
 
         let default = parse_args::<DisplayCreateArgs>(&json!({})).unwrap();
-        assert!(default.backend.is_none());
         assert!(!default.persistent);
     }
 
@@ -359,13 +348,6 @@ mod tests {
         assert_eq!(parsed.y, 20);
         assert!(matches!(parsed.button, Some(ButtonArg::Right)));
         assert_eq!(parsed.count, Some(2));
-    }
-
-    #[test]
-    fn parse_invalid_backend_is_rejected() {
-        let args = json!({"backend": "invalid"});
-        let err = parse_args::<DisplayCreateArgs>(&args).unwrap_err();
-        assert!(matches!(err, LxhError::InvalidArgument(_)));
     }
 
     #[test]

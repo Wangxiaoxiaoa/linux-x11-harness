@@ -27,7 +27,9 @@ Always follow this order:
 5. Terminate the app with `lxh_app_terminate`.
 6. Destroy the display with `lxh_display_destroy`.
 
-If you only need a headless display, use the default backend. If the user wants to watch, set `backend` to `xephyr`.
+Displays are headless Xvfb servers. A read-only preview window opens by default
+so the user can watch what the agent is doing; closing it does not affect the
+display.
 
 ## Key tools
 

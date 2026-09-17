@@ -10,7 +10,7 @@ use crate::tools::{
 use lxh_core::{Driver, LxhError, MouseButton};
 use lxh_driver::DefaultDriver;
 use lxh_preview::PreviewWindow;
-use lxh_runtime::{Backend, Display, DisplayConfig, Runtime};
+use lxh_runtime::{Display, DisplayConfig, Runtime};
 use serde_json::{json, Value};
 use tokio::sync::{Mutex, RwLock};
 
@@ -55,26 +55,15 @@ pub async fn create_display(
     args: &Value,
 ) -> Result<Value, LxhError> {
     let args: DisplayCreateArgs = parse_args(args)?;
-    let mut config = DisplayConfig::default();
+    let config = DisplayConfig::default();
     let preview = args.preview.unwrap_or(true);
-    if let Some(backend) = args.backend {
-        config.backend = match backend {
-            crate::tools::BackendArg::Xvfb => Backend::Xvfb,
-            crate::tools::BackendArg::Xephyr => Backend::Xephyr,
-        };
-    } else if preview {
-        // Preview requires a separate harness X server; default to Xvfb so
-        // closing the preview window does not kill the display.
-        config.backend = Backend::Xvfb;
-    }
 
-    let is_xvfb = matches!(config.backend, Backend::Xvfb);
     let display = state.runtime.create_display(config).await?;
     let id = display.id().to_string();
     let display_str = display.display().to_string();
     let driver = Arc::new(DefaultDriver::new(&display_str)?);
 
-    if preview && is_xvfb {
+    if preview {
         let title = format!(
             "LXH {}",
             args.name

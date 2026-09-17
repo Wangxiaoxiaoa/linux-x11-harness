@@ -376,36 +376,6 @@ async fn display_info_returns_resolution() {
 }
 
 #[tokio::test]
-async fn xephyr_backend_when_available() {
-    if tokio::process::Command::new("which")
-        .arg("Xephyr")
-        .stdout(Stdio::null())
-        .stderr(Stdio::null())
-        .status()
-        .await
-        .map(|s| !s.success())
-        .unwrap_or(true)
-    {
-        return;
-    }
-
-    let daemon = DaemonGuard::new().await;
-    let mut conn = daemon.connect().await;
-    let create = conn
-        .call_tool("lxh_display_create", json!({"backend": "xephyr"}))
-        .await;
-    let display_id = create["result"]["display_id"].as_str().unwrap().to_string();
-
-    let info = conn
-        .call_tool("lxh_display_info", json!({"display_id": display_id}))
-        .await;
-    assert!(info["result"]["display"].is_string());
-
-    conn.call_tool("lxh_display_destroy", json!({"display_id": display_id}))
-        .await;
-}
-
-#[tokio::test]
 async fn desktop_overview_lists_launched_app() {
     let daemon = DaemonGuard::new().await;
     let mut conn = daemon.connect().await;

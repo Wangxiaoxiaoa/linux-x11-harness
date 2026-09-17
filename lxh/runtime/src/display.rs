@@ -2,14 +2,7 @@ use lxh_core::{DisplayInfo, LxhError};
 
 use crate::process::ManagedProcess;
 use crate::wm::OpenboxWM;
-use crate::xserver::{XephyrBackend, XvfbBackend};
-
-#[derive(Clone, Default)]
-pub enum Backend {
-    #[default]
-    Xvfb,
-    Xephyr,
-}
+use crate::xserver::XvfbBackend;
 
 #[derive(Clone)]
 pub enum DisplayKind {
@@ -19,7 +12,6 @@ pub enum DisplayKind {
 
 #[derive(Clone)]
 pub struct DisplayConfig {
-    pub backend: Backend,
     pub width: u32,
     pub height: u32,
     pub depth: u32,
@@ -28,7 +20,6 @@ pub struct DisplayConfig {
 impl Default for DisplayConfig {
     fn default() -> Self {
         Self {
-            backend: Backend::default(),
             width: 1280,
             height: 800,
             depth: 24,
@@ -53,12 +44,8 @@ impl Display {
         display: String,
         config: DisplayConfig,
     ) -> Result<Self, LxhError> {
-        let xserver = match config.backend {
-            Backend::Xvfb => {
-                XvfbBackend::start(&display, config.width, config.height, config.depth).await?
-            }
-            Backend::Xephyr => XephyrBackend::start(&display, config.width, config.height).await?,
-        };
+        let xserver =
+            XvfbBackend::start(&display, config.width, config.height, config.depth).await?;
 
         let wm = OpenboxWM::start(&display).await?;
 

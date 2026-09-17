@@ -1,6 +1,6 @@
 # linux-x11-harness Architecture
 
-> **Implementation status:** This document describes the target architecture. The current MVP implements the MCP stdio server, native X11/XTest driver, Xvfb + openbox runtime, and AT-SPI state access. Items marked as reserved or future (CuaDriver adapter, HTTP/SSE, C FFI, runtime submodules, Xephyr backend) are not yet implemented.
+> **Implementation status:** This document describes the target architecture. The current MVP implements the MCP stdio server, native X11/XTest driver, Xvfb + openbox runtime, display preview, and AT-SPI state access. Items marked as reserved or future (CuaDriver adapter, HTTP/SSE, C FFI, runtime submodules) are not yet implemented.
 
 ## 1. Overview
 
@@ -17,7 +17,7 @@ The system is designed to be consumed in three ways:
 | Goal | Description |
 |------|-------------|
 | **Multi-display** | Support multiple concurrent X11 displays (`:99`, `:100`, `:101`, ...). |
-| **Backend variety** | Headless (`Xvfb`) X server; `Xephyr` is reserved for future use. |
+| **Headless backend** | Headless (`Xvfb`) X server with a separate read-only preview window. |
 | **Pluggable driver** | Built-in native driver by default; optional `cua-driver` adapter through a unified `Driver` trait. |
 | **Built-in automation** | Mouse, keyboard, screenshot, and AT-SPI state access per display. |
 | **No host interference** | Operations on harness displays must not steal focus from or affect the user's main desktop. |
@@ -262,7 +262,6 @@ lxh-runtime/
     ├── xserver/
     │   ├── mod.rs          # XServerBackend re-exports + common logic
     │   ├── xvfb.rs         # XvfbBackend implementation
-    │   ├── xephyr.rs       # XephyrBackend implementation
     │   └── readiness.rs    # X server readiness detection
     ├── wm/
     │   ├── mod.rs
@@ -278,7 +277,9 @@ lxh-runtime/
 
 ### 6.1 X Server Management
 
-X server backends (`XvfbBackend`, `XephyrBackend`) are implemented in `lxh-runtime`. The `XServerBackend` trait is defined in `lxh-core`.
+The `XvfbBackend` is implemented in `lxh-runtime`. Each harness display is a
+headless Xvfb server; user-visible output is provided by a separate preview
+window (`lxh-preview`) that does not affect the display lifecycle.
 
 ### 6.2 Window Manager
 
@@ -294,7 +295,7 @@ All tools are prefixed with `lxh_`.
 
 | Tool | Purpose | Required args |
 |------|---------|---------------|
-| `lxh_display_create` | Create display (`backend`: `xvfb` or `xephyr`) | — |
+| `lxh_display_create` | Create display | — |
 | `lxh_display_attach` | Attach to an existing display (e.g. `:0`) | `display_id` |
 | `lxh_display_detach` | Detach from an existing display without destroying it | `display_id` |
 | `lxh_display_destroy` | Destroy display | `display_id` |
@@ -459,7 +460,6 @@ host = "127.0.0.1"
 
 [xserver]
 xvfb_binary = "Xvfb"
-xephyr_binary = "Xephyr"
 window_manager = "openbox"
 
 [driver]
@@ -479,7 +479,7 @@ capture_format = "png"   # "png" | "jpeg"
 ### 12.2 Display Creation
 
 1. Allocate display number.
-2. Start X server process (Xvfb or Xephyr).
+2. Start Xvfb X server process.
 3. Wait for `DISPLAY` readiness.
 4. Start window manager.
 5. Instantiate selected driver (`NativeDriver` or `CuaDriver`).
@@ -525,7 +525,6 @@ On `SIGTERM` / `SIGINT`:
 - **Wayland/XWayland support** for future Linux environments.
 - **Recording** (video capture of a display).
 - **Snapshot/restore** of a display state.
-- **Remote VNC** access for debugging visible `Xephyr` displays.
 - **Resource quotas** (memory, CPU) per display via cgroup integration.
 
 ## 16. Summary
