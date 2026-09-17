@@ -7,11 +7,11 @@ use image::{imageops::FilterType, RgbaImage};
 use lxh_core::LxhError;
 use x11rb::connection::Connection;
 use x11rb::protocol::xproto::{
-    AtomEnum, ConnectionExt, CreateGCAux, CreateWindowAux, EventMask, GetImageReply, Gcontext,
+    AtomEnum, ConnectionExt, CreateGCAux, CreateWindowAux, EventMask, Gcontext, GetImageReply,
     ImageFormat, PropMode, Window, WindowClass,
 };
-use x11rb::wrapper::ConnectionExt as WrapperExt;
 use x11rb::rust_connection::RustConnection;
+use x11rb::wrapper::ConnectionExt as WrapperExt;
 use x11rb::COPY_DEPTH_FROM_PARENT;
 
 /// Preview window size is relative to the user's screen. The harness display
@@ -66,8 +66,10 @@ fn run_preview_loop(
     refresh_interval: Duration,
     stop: Arc<AtomicBool>,
 ) -> Result<(), LxhError> {
-    let (target_conn, target_screen) = RustConnection::connect(Some(target_display))
-        .map_err(|e| LxhError::DisplayUnavailable(format!("cannot connect to target display: {e}")))?;
+    let (target_conn, target_screen) =
+        RustConnection::connect(Some(target_display)).map_err(|e| {
+            LxhError::DisplayUnavailable(format!("cannot connect to target display: {e}"))
+        })?;
     let target_root = target_conn.setup().roots[target_screen].root;
     let target_geom = target_conn
         .get_geometry(target_root)
@@ -77,15 +79,20 @@ fn run_preview_loop(
     let width = target_geom.width as u32;
     let height = target_geom.height as u32;
 
-    let user_display = std::env::var("DISPLAY").ok().unwrap_or_else(|| ":0".to_string());
-    let (user_conn, user_screen) = RustConnection::connect(Some(&user_display))
-        .map_err(|e| LxhError::DisplayUnavailable(format!("cannot connect to user display: {e}")))?;
+    let user_display = std::env::var("DISPLAY")
+        .ok()
+        .unwrap_or_else(|| ":0".to_string());
+    let (user_conn, user_screen) = RustConnection::connect(Some(&user_display)).map_err(|e| {
+        LxhError::DisplayUnavailable(format!("cannot connect to user display: {e}"))
+    })?;
     let user_root = user_conn.setup().roots[user_screen].root;
     let user_geom = user_conn
         .get_geometry(user_root)
         .map_err(|e| LxhError::DisplayUnavailable(format!("get_geometry user failed: {e}")))?
         .reply()
-        .map_err(|e| LxhError::DisplayUnavailable(format!("get_geometry user reply failed: {e}")))?;
+        .map_err(|e| {
+            LxhError::DisplayUnavailable(format!("get_geometry user reply failed: {e}"))
+        })?;
     let max_preview_w = user_geom.width as u32 / PREVIEW_SCREEN_FRACTION;
     let max_preview_h = user_geom.height as u32 / PREVIEW_SCREEN_FRACTION;
     let (target_w, target_h) = fit_inside(width, height, max_preview_w, max_preview_h);
@@ -202,7 +209,8 @@ fn draw_image(
     .map_err(|e| LxhError::InvalidArgument(format!("put_image failed: {e}")))?
     .check()
     .map_err(|e| LxhError::InvalidArgument(format!("put_image check failed: {e}")))?;
-    conn.flush().map_err(|e| LxhError::InvalidArgument(format!("flush failed: {e}")))
+    conn.flush()
+        .map_err(|e| LxhError::InvalidArgument(format!("flush failed: {e}")))
 }
 
 fn create_gc(conn: &RustConnection, win: Window) -> Result<Gcontext, LxhError> {
@@ -212,9 +220,7 @@ fn create_gc(conn: &RustConnection, win: Window) -> Result<Gcontext, LxhError> {
     conn.create_gc(
         gc,
         win,
-        &CreateGCAux::new()
-            .foreground(0)
-            .background(u32::MAX),
+        &CreateGCAux::new().foreground(0).background(u32::MAX),
     )
     .map_err(|e| LxhError::InvalidArgument(format!("create_gc failed: {e}")))?
     .check()
@@ -243,35 +249,20 @@ fn set_window_opacity(conn: &RustConnection, win: Window, opacity: u32) -> Resul
         .reply()
         .map_err(|e| LxhError::InvalidArgument(format!("intern_atom reply failed: {e}")))?
         .atom;
-    conn.change_property32(
-        PropMode::REPLACE,
-        win,
-        atom,
-        AtomEnum::CARDINAL,
-        &[opacity],
-    )
-    .map_err(|e| LxhError::InvalidArgument(format!("change_property32 failed: {e}")))?
-    .check()
-    .map_err(|e| LxhError::InvalidArgument(format!("change_property32 check failed: {e}")))
+    conn.change_property32(PropMode::REPLACE, win, atom, AtomEnum::CARDINAL, &[opacity])
+        .map_err(|e| LxhError::InvalidArgument(format!("change_property32 failed: {e}")))?
+        .check()
+        .map_err(|e| LxhError::InvalidArgument(format!("change_property32 check failed: {e}")))
 }
 
 fn fit_inside(src_w: u32, src_h: u32, max_w: u32, max_h: u32) -> (u32, u32) {
     let scale_w = max_w as f64 / src_w as f64;
     let scale_h = max_h as f64 / src_h as f64;
     let scale = scale_w.min(scale_h).min(1.0);
-    (
-        (src_w as f64 * scale) as u32,
-        (src_h as f64 * scale) as u32,
-    )
+    ((src_w as f64 * scale) as u32, (src_h as f64 * scale) as u32)
 }
 
-fn scale_image(
-    bgra: &[u8],
-    src_w: u32,
-    src_h: u32,
-    dst_w: u32,
-    dst_h: u32,
-) -> Option<Vec<u8>> {
+fn scale_image(bgra: &[u8], src_w: u32, src_h: u32, dst_w: u32, dst_h: u32) -> Option<Vec<u8>> {
     let mut rgba = vec![0u8; (src_w * src_h * 4) as usize];
     for (src_chunk, dst_chunk) in bgra.chunks_exact(4).zip(rgba.chunks_exact_mut(4)) {
         dst_chunk[0] = src_chunk[2];
@@ -314,5 +305,6 @@ fn draw_scaled_image(
     .map_err(|e| LxhError::InvalidArgument(format!("put_image failed: {e}")))?
     .check()
     .map_err(|e| LxhError::InvalidArgument(format!("put_image check failed: {e}")))?;
-    conn.flush().map_err(|e| LxhError::InvalidArgument(format!("flush failed: {e}")))
+    conn.flush()
+        .map_err(|e| LxhError::InvalidArgument(format!("flush failed: {e}")))
 }

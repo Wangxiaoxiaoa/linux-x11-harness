@@ -82,7 +82,9 @@ pub async fn create_display(
                 .or_else(|| session.client_name.clone())
                 .unwrap_or_else(|| "Agent".to_string())
         );
-        if let Ok(preview) = PreviewWindow::start(&display_str, &title, std::time::Duration::from_millis(100)) {
+        if let Ok(preview) =
+            PreviewWindow::start(&display_str, &title, std::time::Duration::from_millis(100))
+        {
             state.previews.write().await.insert(id.clone(), preview);
         }
     }

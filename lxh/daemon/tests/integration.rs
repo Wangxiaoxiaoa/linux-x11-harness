@@ -54,7 +54,8 @@ impl Connection {
     }
 
     async fn create_display(&mut self) -> Value {
-        self.call_tool("lxh_display_create", json!({"preview": false})).await
+        self.call_tool("lxh_display_create", json!({"preview": false}))
+            .await
     }
 
     async fn send(&mut self, req: &Value) -> Value {
@@ -577,7 +578,10 @@ async fn persistent_display_survives_client_disconnect() {
     let daemon = DaemonGuard::new().await;
     let mut conn = daemon.connect().await;
     let create = conn
-        .call_tool("lxh_display_create", json!({"persistent": true, "preview": false}))
+        .call_tool(
+            "lxh_display_create",
+            json!({"persistent": true, "preview": false}),
+        )
         .await;
     let display_id = create["result"]["display_id"].as_str().unwrap().to_string();
 
