@@ -264,7 +264,9 @@ fn fit_inside(src_w: u32, src_h: u32, max_w: u32, max_h: u32) -> (u32, u32) {
 
 fn scale_image(bgra: &[u8], src_w: u32, src_h: u32, dst_w: u32, dst_h: u32) -> Option<Vec<u8>> {
     let mut rgba = vec![0u8; (src_w * src_h * 4) as usize];
-    for (src_chunk, dst_chunk) in bgra.chunks_exact(4).zip(rgba.chunks_exact_mut(4)) {
+    let (src_pixels, _) = bgra.as_chunks::<4>();
+    let (dst_pixels, _) = rgba.as_chunks_mut::<4>();
+    for (src_chunk, dst_chunk) in src_pixels.iter().zip(dst_pixels.iter_mut()) {
         dst_chunk[0] = src_chunk[2];
         dst_chunk[1] = src_chunk[1];
         dst_chunk[2] = src_chunk[0];
@@ -273,7 +275,9 @@ fn scale_image(bgra: &[u8], src_w: u32, src_h: u32, dst_w: u32, dst_h: u32) -> O
     let src = RgbaImage::from_raw(src_w, src_h, rgba)?;
     let dst = image::imageops::resize(&src, dst_w, dst_h, FilterType::Triangle);
     let mut out = vec![0u8; (dst_w * dst_h * 4) as usize];
-    for (src_chunk, dst_chunk) in dst.as_raw().chunks_exact(4).zip(out.chunks_exact_mut(4)) {
+    let (src_pixels, _) = dst.as_raw().as_chunks::<4>();
+    let (dst_pixels, _) = out.as_chunks_mut::<4>();
+    for (src_chunk, dst_chunk) in src_pixels.iter().zip(dst_pixels.iter_mut()) {
         dst_chunk[0] = src_chunk[2];
         dst_chunk[1] = src_chunk[1];
         dst_chunk[2] = src_chunk[0];
