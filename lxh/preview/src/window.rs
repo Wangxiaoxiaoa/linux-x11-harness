@@ -2,7 +2,7 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::mpsc;
 use std::sync::Arc;
 use std::thread;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use image::{imageops::FilterType, RgbaImage};
 use lxh_core::LxhError;
@@ -19,6 +19,9 @@ use x11rb::COPY_DEPTH_FROM_PARENT;
 
 /// Refresh interval for the preview render loop.
 const REFRESH_INTERVAL: Duration = Duration::from_millis(100);
+
+/// How often pending X events (close, double click) are checked.
+const PUMP_INTERVAL: Duration = Duration::from_millis(20);
 
 /// Maximum gap between two clicks (in X server milliseconds) that still counts
 /// as a double click.
@@ -46,6 +49,7 @@ pub(crate) struct PreviewConfig {
 pub(crate) struct PreviewWindow {
     stop: Arc<AtomicBool>,
     alive: Arc<AtomicBool>,
+    window_id: u32,
 }
 
 impl PreviewWindow {
@@ -58,7 +62,7 @@ impl PreviewWindow {
     ) -> Result<Self, LxhError> {
         let stop = Arc::new(AtomicBool::new(false));
         let alive = Arc::new(AtomicBool::new(true));
-        let (ready_tx, ready_rx) = mpsc::channel();
+        let (ready_tx, ready_rx) = mpsc::channel::<Result<u32, String>>();
 
         let stop2 = Arc::clone(&stop);
         let alive2 = Arc::clone(&alive);
@@ -74,7 +78,11 @@ impl PreviewWindow {
         });
 
         match ready_rx.recv() {
-            Ok(Ok(())) => Ok(Self { stop, alive }),
+            Ok(Ok(window_id)) => Ok(Self {
+                stop,
+                alive,
+                window_id,
+            }),
             Ok(Err(msg)) => Err(LxhError::DisplayUnavailable(msg)),
             Err(_) => Err(LxhError::DisplayUnavailable(
                 "preview thread died during startup".into(),
@@ -84,6 +92,11 @@ impl PreviewWindow {
 
     pub(crate) fn is_alive(&self) -> bool {
         self.alive.load(Ordering::Relaxed)
+    }
+
+    /// The X window id of the preview, for external liveness probes.
+    pub(crate) fn window_id(&self) -> u32 {
+        self.window_id
     }
 
     pub(crate) fn stop(&self) {
@@ -118,7 +131,7 @@ fn run(
     config: PreviewConfig,
     stop: &AtomicBool,
     alive: &AtomicBool,
-    ready: mpsc::Sender<Result<(), String>>,
+    ready: mpsc::Sender<Result<u32, String>>,
 ) -> Result<(), LxhError> {
     let mut preview = match Preview::new(target_display, title, config) {
         Ok(p) => p,
@@ -127,16 +140,22 @@ fn run(
             return Ok(());
         }
     };
-    let _ = ready.send(Ok(()));
+    let _ = ready.send(Ok(preview.win));
 
+    // Events are pumped frequently so user-initiated closes are noticed
+    // promptly; the screen is only re-grabbed at the refresh interval.
+    let mut last_render = Instant::now();
     while !stop.load(Ordering::Relaxed) && alive.load(Ordering::Relaxed) {
         if !preview.pump_events()? {
             break;
         }
-        if let Err(e) = preview.render() {
-            let _ = e;
+        if last_render.elapsed() >= REFRESH_INTERVAL {
+            if let Err(e) = preview.render() {
+                let _ = e;
+            }
+            last_render = Instant::now();
         }
-        thread::sleep(REFRESH_INTERVAL);
+        thread::sleep(PUMP_INTERVAL);
     }
 
     preview.shutdown();

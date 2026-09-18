@@ -49,6 +49,17 @@ impl PreviewManager {
         let mut inner = self.inner.lock().unwrap();
         inner.prune_dead();
 
+        // The render thread notices a user-initiated close only on its next
+        // event pump, so `alive` can be stale for a moment. The X server is
+        // the source of truth: probe the window before trusting the flag.
+        if let Some(entry) = inner.windows.get(display_id) {
+            let live = entry.window.is_alive()
+                && window_still_exists(&user_display(), entry.window.window_id());
+            if !live {
+                inner.remove(display_id);
+            }
+        }
+
         if inner.windows.contains_key(display_id) {
             return Ok(());
         }
@@ -129,6 +140,19 @@ impl Inner {
 
 fn user_display() -> String {
     std::env::var("DISPLAY").unwrap_or_else(|_| ":0".to_string())
+}
+
+/// Whether `win` still exists on the user display. Used to detect a window
+/// the user closed before the render thread noticed it.
+fn window_still_exists(display: &str, win: u32) -> bool {
+    let Ok((conn, _)) = RustConnection::connect(Some(display)) else {
+        // Cannot tell; assume it is still there rather than killing previews
+        // while the display is temporarily unreachable.
+        return true;
+    };
+    conn.get_geometry(win)
+        .map(|cookie| cookie.reply().is_ok())
+        .unwrap_or(false)
 }
 
 fn root_geometry(display: &str) -> Result<(u32, u32), LxhError> {

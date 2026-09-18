@@ -18,6 +18,205 @@ fn bin_path() -> PathBuf {
         .unwrap_or_else(|_| PathBuf::from("target/debug/linux-x11-harness"))
 }
 
+fn pid_file_for(socket: &std::path::Path) -> PathBuf {
+    let mut pid = socket.to_path_buf();
+    pid.set_extension("pid");
+    pid
+}
+
+/// Stop a detached daemon through the CLI (no unsafe pid signalling here).
+fn stop_daemon_sync(socket: &std::path::Path) {
+    let _ = std::process::Command::new(bin_path())
+        .arg("stop")
+        .arg("--socket")
+        .arg(socket)
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .status();
+}
+
+/// A proxy started exactly the way an MCP client starts it. Its daemon lives
+/// in its own session, so it must be stopped explicitly.
+struct ProxyGuard {
+    socket: PathBuf,
+    child: tokio::process::Child,
+}
+
+impl Drop for ProxyGuard {
+    fn drop(&mut self) {
+        let _ = self.child.start_kill();
+        stop_daemon_sync(&self.socket);
+        let _ = std::fs::remove_file(&self.socket);
+        let _ = std::fs::remove_file(pid_file_for(&self.socket));
+    }
+}
+
+async fn spawn_proxy() -> ProxyGuard {
+    let tmp = env::temp_dir();
+    let unique = format!(
+        "{}-{}",
+        std::process::id(),
+        TEST_COUNTER.fetch_add(1, Ordering::SeqCst)
+    );
+    let socket = tmp.join(format!("lxh-test-{unique}.sock"));
+    let _ = tokio::fs::remove_file(&socket).await;
+
+    let child = Command::new(bin_path())
+        .arg("--socket")
+        .arg(&socket)
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::null())
+        .spawn()
+        .expect("spawn proxy");
+
+    for _ in 0..100 {
+        tokio::time::sleep(Duration::from_millis(50)).await;
+        if socket.exists() {
+            break;
+        }
+    }
+    assert!(socket.exists(), "proxy did not start the daemon");
+
+    ProxyGuard { socket, child }
+}
+
+fn ppid_of(pid: u32) -> Option<u32> {
+    let status = std::fs::read_to_string(format!("/proc/{pid}/status")).ok()?;
+    for line in status.lines() {
+        if let Some(rest) = line.strip_prefix("PPid:") {
+            return rest.trim().parse().ok();
+        }
+    }
+    None
+}
+
+fn window_title(conn: &RustConnection, win: u32) -> Option<String> {
+    let reply = conn
+        .get_property(false, win, AtomEnum::WM_NAME, AtomEnum::STRING, 0, 1024)
+        .ok()?
+        .reply()
+        .ok()?;
+    if reply.value.is_empty() {
+        return None;
+    }
+    Some(String::from_utf8_lossy(&reply.value).to_string())
+}
+
+fn find_window_with_title_prefix(conn: &RustConnection, root: u32, prefix: &str) -> Option<u32> {
+    let tree = conn.query_tree(root).ok()?.reply().ok()?;
+    for win in tree.children {
+        if let Some(title) = window_title(conn, win) {
+            if title.starts_with(prefix) {
+                return Some(win);
+            }
+        }
+        if let Some(found) = find_window_with_title_prefix(conn, win, prefix) {
+            return Some(found);
+        }
+    }
+    None
+}
+
+async fn wait_for_preview_window(conn: &RustConnection, root: u32) -> Option<u32> {
+    for _ in 0..40 {
+        if let Some(win) = find_window_with_title_prefix(conn, root, "LXH") {
+            return Some(win);
+        }
+        tokio::time::sleep(Duration::from_millis(100)).await;
+    }
+    None
+}
+
+async fn wait_until_window_gone(conn: &RustConnection, root: u32) -> bool {
+    for _ in 0..40 {
+        if find_window_with_title_prefix(conn, root, "LXH").is_none() {
+            return true;
+        }
+        tokio::time::sleep(Duration::from_millis(100)).await;
+    }
+    false
+}
+
+async fn wait_for_geometry(
+    conn: &RustConnection,
+    win: u32,
+    matches: impl Fn(u32, u32) -> bool,
+) -> bool {
+    for _ in 0..40 {
+        if let Ok(reply) = conn.get_geometry(win) {
+            if let Ok(geom) = reply.reply() {
+                if matches(geom.width as u32, geom.height as u32) {
+                    return true;
+                }
+            }
+        }
+        tokio::time::sleep(Duration::from_millis(100)).await;
+    }
+    false
+}
+
+/// Two rapid synthetic clicks on the preview window centre.
+fn double_click(conn: &RustConnection, root: u32, win: u32) {
+    let geom = conn.get_geometry(win).unwrap().reply().unwrap();
+    let reply = conn
+        .translate_coordinates(win, root, 0, 0)
+        .unwrap()
+        .reply()
+        .unwrap();
+    let cx = reply.dst_x + geom.width as i16 / 2;
+    let cy = reply.dst_y + geom.height as i16 / 2;
+    for _ in 0..2 {
+        conn.xtest_fake_input(MOTION_NOTIFY_EVENT, 0, 0, root, cx, cy, 0)
+            .unwrap();
+        conn.xtest_fake_input(BUTTON_PRESS_EVENT, 1, 0, root, cx, cy, 0)
+            .unwrap();
+        conn.xtest_fake_input(BUTTON_RELEASE_EVENT, 1, 0, root, cx, cy, 0)
+            .unwrap();
+    }
+    conn.flush().unwrap();
+}
+
+/// A dedicated "user side" X server the preview renders into. Harness
+/// displays are always numbered >= :100, so low numbers never collide.
+struct UserXvfb {
+    display_str: String,
+    child: tokio::process::Child,
+}
+
+impl Drop for UserXvfb {
+    fn drop(&mut self) {
+        let _ = self.child.start_kill();
+    }
+}
+
+async fn spawn_user_xvfb() -> UserXvfb {
+    let display = 50 + (TEST_COUNTER.fetch_add(1, Ordering::SeqCst) % 40) as u32;
+    let display_str = format!(":{display}");
+    let child = Command::new("Xvfb")
+        .arg(&display_str)
+        .args(["-screen", "0", "1280x800x24", "-ac", "-noreset"])
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .kill_on_drop(true)
+        .spawn()
+        .expect("spawn user Xvfb");
+
+    let mut ready = false;
+    for _ in 0..100 {
+        tokio::time::sleep(Duration::from_millis(50)).await;
+        if RustConnection::connect(Some(&display_str)).is_ok() {
+            ready = true;
+            break;
+        }
+    }
+    assert!(
+        ready,
+        "user Xvfb did not accept connections on {display_str}"
+    );
+    UserXvfb { display_str, child }
+}
+
 struct DaemonGuard {
     socket: PathBuf,
     pid: PathBuf,
@@ -85,6 +284,10 @@ impl Connection {
 
 impl DaemonGuard {
     async fn new() -> Self {
+        Self::new_with_display(None).await
+    }
+
+    async fn new_with_display(display: Option<&str>) -> Self {
         let tmp = env::temp_dir();
         let unique = format!(
             "{}-{}",
@@ -96,10 +299,14 @@ impl DaemonGuard {
         let _ = tokio::fs::remove_file(&socket).await;
         let _ = tokio::fs::remove_file(&pid).await;
 
-        let mut child = Command::new(bin_path())
-            .arg("serve")
+        let mut cmd = Command::new(bin_path());
+        cmd.arg("serve")
             .env("LXH_SOCKET_PATH", &socket)
-            .env("LXH_PID_PATH", &pid)
+            .env("LXH_PID_PATH", &pid);
+        if let Some(display) = display {
+            cmd.env("DISPLAY", display);
+        }
+        let mut child = cmd
             .stdout(Stdio::null())
             .stderr(Stdio::null())
             .spawn()
@@ -440,7 +647,11 @@ async fn desktop_overview_lists_launched_app() {
 }
 
 use x11rb::connection::Connection as X11Connection;
-use x11rb::protocol::xproto::{AtomEnum, ConnectionExt, MapState, QueryTreeReply, Window};
+use x11rb::protocol::xproto::{
+    AtomEnum, ConnectionExt, MapState, QueryTreeReply, Window, BUTTON_PRESS_EVENT,
+    BUTTON_RELEASE_EVENT, MOTION_NOTIFY_EVENT,
+};
+use x11rb::protocol::xtest::ConnectionExt as _;
 use x11rb::rust_connection::RustConnection;
 
 fn find_xterm_window(display: &str) -> Option<u64> {
@@ -761,4 +972,154 @@ async fn atspi_interaction_with_gtk_app() {
     .await;
     conn.call_tool("lxh_display_destroy", json!({"display_id": display_id}))
         .await;
+}
+
+#[tokio::test]
+async fn mcp_proxy_forwards_responses_while_stdin_is_open() {
+    // Regression guard: the proxy used to poll socket->stdout only after
+    // stdin reached EOF, so interactive clients timed out after 30s.
+    let mut guard = spawn_proxy().await;
+    let mut stdin = guard.child.stdin.take().expect("proxy stdin");
+    let mut stdout = BufReader::new(guard.child.stdout.take().expect("proxy stdout"));
+
+    let init = json!({
+        "jsonrpc": "2.0",
+        "id": 0,
+        "method": "initialize",
+        "params": {
+            "protocolVersion": "2025-11-25",
+            "capabilities": {},
+            "clientInfo": {"name": "proxy-test", "version": "1"}
+        }
+    });
+    stdin
+        .write_all((init.to_string() + "\n").as_bytes())
+        .await
+        .expect("write initialize");
+    stdin.flush().await.expect("flush");
+
+    // stdin intentionally stays open: a forwarding regression would only
+    // deliver the response after EOF.
+    let mut line = String::new();
+    timeout(Duration::from_secs(10), stdout.read_line(&mut line))
+        .await
+        .expect("proxy did not forward a response while stdin stayed open")
+        .expect("read response");
+    let resp: Value = serde_json::from_str(&line).expect("valid json response");
+    assert_eq!(resp["id"], 0);
+    assert!(resp["result"]["serverInfo"].is_object());
+
+    drop(stdin);
+}
+
+#[tokio::test]
+async fn daemon_detaches_from_proxy_process_tree() {
+    // Regression guard: agents that kill their MCP server's process tree on
+    // exit used to take the daemon — and every display inside it — down too.
+    let mut guard = spawn_proxy().await;
+    let proxy_pid = guard.child.id().expect("proxy pid");
+    let pid_file = pid_file_for(&guard.socket);
+
+    let mut daemon_pid = 0u32;
+    for _ in 0..50 {
+        if let Ok(text) = tokio::fs::read_to_string(&pid_file).await {
+            if let Ok(pid) = text.trim().parse::<u32>() {
+                daemon_pid = pid;
+                break;
+            }
+        }
+        tokio::time::sleep(Duration::from_millis(50)).await;
+    }
+    assert_ne!(daemon_pid, 0, "daemon did not write its pid file");
+
+    let ppid = ppid_of(daemon_pid).expect("daemon /proc entry");
+    assert_ne!(
+        ppid, proxy_pid,
+        "daemon must be reparented out of the proxy's process tree"
+    );
+
+    guard.child.kill().await.expect("kill proxy");
+    tokio::time::sleep(Duration::from_millis(300)).await;
+    assert!(
+        std::path::Path::new(&format!("/proc/{daemon_pid}")).exists(),
+        "daemon died together with the proxy"
+    );
+}
+
+#[tokio::test]
+async fn preview_window_lifecycle_and_zoom() {
+    let xvfb = spawn_user_xvfb().await;
+    let daemon = DaemonGuard::new_with_display(Some(&xvfb.display_str)).await;
+    let mut conn = daemon.connect().await;
+
+    // Preview defaults to on.
+    let create = conn.call_tool("lxh_display_create", json!({})).await;
+    let display_id = create["result"]["display_id"].as_str().unwrap().to_string();
+
+    let (user_conn, screen) =
+        RustConnection::connect(Some(&xvfb.display_str)).expect("connect user display");
+    let root = user_conn.setup().roots[screen].root;
+
+    // 1280x800 user screen, 1280x800 harness display -> 1/8 = 160x100.
+    let normal = (160u32, 100u32);
+    let win = wait_for_preview_window(&user_conn, root)
+        .await
+        .expect("preview window did not appear");
+    let geom = user_conn.get_geometry(win).unwrap().reply().unwrap();
+    assert_eq!(
+        (geom.width as u32, geom.height as u32),
+        normal,
+        "preview window is not the expected fixed size"
+    );
+
+    // Tool close removes the window, tool open brings it back.
+    conn.call_tool("lxh_preview_close", json!({"display_id": display_id}))
+        .await;
+    assert!(
+        wait_until_window_gone(&user_conn, root).await,
+        "preview window still present after lxh_preview_close"
+    );
+    conn.call_tool("lxh_preview_open", json!({"display_id": display_id}))
+        .await;
+    let win = wait_for_preview_window(&user_conn, root)
+        .await
+        .expect("preview window did not reopen");
+
+    // A user closing the window (DestroyNotify) must be noticed by the
+    // daemon, and reopening must create a fresh window.
+    user_conn.destroy_window(win).unwrap();
+    user_conn.flush().unwrap();
+    assert!(
+        wait_until_window_gone(&user_conn, root).await,
+        "preview window was not destroyed"
+    );
+    conn.call_tool("lxh_preview_open", json!({"display_id": display_id}))
+        .await;
+    let win = wait_for_preview_window(&user_conn, root)
+        .await
+        .expect("preview window did not reopen after external close");
+
+    // Double click zooms well past the fixed size, double click again
+    // restores the exact fixed size.
+    double_click(&user_conn, root, win);
+    assert!(
+        wait_for_geometry(&user_conn, win, |w, h| (w * h) > normal.0 * normal.1 * 4).await,
+        "double click did not zoom the preview"
+    );
+    let win = wait_for_preview_window(&user_conn, root)
+        .await
+        .expect("preview window vanished while zoomed");
+    double_click(&user_conn, root, win);
+    assert!(
+        wait_for_geometry(&user_conn, win, |w, h| (w, h) == normal).await,
+        "double click did not restore the preview size"
+    );
+
+    // The preview dies with its display.
+    conn.call_tool("lxh_display_destroy", json!({"display_id": display_id}))
+        .await;
+    assert!(
+        wait_until_window_gone(&user_conn, root).await,
+        "preview window outlived its display"
+    );
 }
