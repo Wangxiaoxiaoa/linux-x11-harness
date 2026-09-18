@@ -12,9 +12,10 @@ pub use display::{Display, DisplayConfig, DisplayKind};
 
 fn process_scoped_display_start() -> u32 {
     // Use the process id so that concurrent daemon instances do not collide
-    // on the low display numbers starting at :99.
+    // on the low display numbers starting at :99. X11 display numbers must
+    // stay below 65536, so the modulo keeps the range inside [100, 65099].
     let pid = std::process::id();
-    100 + (pid % 90_000)
+    100 + (pid % 65_000)
 }
 
 pub struct Runtime {

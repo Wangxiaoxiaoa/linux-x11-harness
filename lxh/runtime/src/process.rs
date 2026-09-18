@@ -21,6 +21,13 @@ impl ManagedProcess {
             command.env(k, v);
         }
 
+        // Harness displays have no input-method server, so IM variables
+        // inherited from the user session only make XIM/GTK clients stall
+        // (xterm can block ~5s in XIM init on XMODIFIERS=@im=<missing>).
+        for var in ["XMODIFIERS", "GTK_IM_MODULE", "QT_IM_MODULE"] {
+            command.env_remove(var);
+        }
+
         let child = command
             .spawn()
             .map_err(|e| LxhError::ProcessSpawnFailed(e.to_string()))?;
