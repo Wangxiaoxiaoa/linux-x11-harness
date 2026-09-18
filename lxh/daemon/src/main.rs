@@ -108,12 +108,32 @@ async fn run_status(socket_path: PathBuf) {
 async fn run_mcp(socket_path: PathBuf) {
     if !socket_path.exists() {
         let executable = env::current_exe().expect("current exe");
-        let mut cmd = tokio::process::Command::new(executable);
-        cmd.arg("serve").arg("--socket").arg(&socket_path);
-        cmd.stdin(std::process::Stdio::null());
-        cmd.stdout(std::process::Stdio::null());
-        cmd.stderr(std::process::Stdio::null());
-        let mut child = cmd.spawn().expect("spawn daemon");
+
+        // Run the daemon in its own session so it is reparented to init
+        // immediately. Agents that kill their MCP server's whole process tree
+        // on exit (e.g. OpenCode) would otherwise take the shared daemon —
+        // and every display inside it — down with them.
+        let detached = tokio::process::Command::new("setsid")
+            .arg("-f")
+            .arg(&executable)
+            .arg("serve")
+            .arg("--socket")
+            .arg(&socket_path)
+            .stdin(std::process::Stdio::null())
+            .stdout(std::process::Stdio::null())
+            .stderr(std::process::Stdio::null())
+            .status()
+            .await;
+
+        if detached.is_err() || !detached.unwrap().success() {
+            // setsid unavailable or failed; fall back to a direct child.
+            let mut cmd = tokio::process::Command::new(&executable);
+            cmd.arg("serve").arg("--socket").arg(&socket_path);
+            cmd.stdin(std::process::Stdio::null());
+            cmd.stdout(std::process::Stdio::null());
+            cmd.stderr(std::process::Stdio::null());
+            cmd.spawn().expect("spawn daemon");
+        }
 
         for _ in 0..50 {
             tokio::time::sleep(std::time::Duration::from_millis(100)).await;
@@ -123,7 +143,6 @@ async fn run_mcp(socket_path: PathBuf) {
         }
 
         if !socket_path.exists() {
-            let _ = child.kill().await;
             eprintln!("daemon failed to start");
             std::process::exit(1);
         }
