@@ -105,52 +105,70 @@ async fn run_status(socket_path: PathBuf) {
     println!("running");
 }
 
-async fn run_mcp(socket_path: PathBuf) {
-    if !socket_path.exists() {
-        let executable = env::current_exe().expect("current exe");
+/// Start the daemon in its own session so it is reparented to init
+/// immediately. Agents that kill their MCP server's whole process tree on
+/// exit (e.g. OpenCode) would otherwise take the shared daemon — and every
+/// display inside it — down with them.
+async fn spawn_daemon_detached(socket_path: &Path) {
+    let executable = env::current_exe().expect("current exe");
 
-        // Run the daemon in its own session so it is reparented to init
-        // immediately. Agents that kill their MCP server's whole process tree
-        // on exit (e.g. OpenCode) would otherwise take the shared daemon —
-        // and every display inside it — down with them.
-        let detached = tokio::process::Command::new("setsid")
-            .arg("-f")
-            .arg(&executable)
-            .arg("serve")
-            .arg("--socket")
-            .arg(&socket_path)
-            .stdin(std::process::Stdio::null())
-            .stdout(std::process::Stdio::null())
-            .stderr(std::process::Stdio::null())
-            .status()
-            .await;
+    let detached = tokio::process::Command::new("setsid")
+        .arg("-f")
+        .arg(&executable)
+        .arg("serve")
+        .arg("--socket")
+        .arg(socket_path)
+        .stdin(std::process::Stdio::null())
+        .stdout(std::process::Stdio::null())
+        .stderr(std::process::Stdio::null())
+        .status()
+        .await;
 
-        if detached.is_err() || !detached.unwrap().success() {
-            // setsid unavailable or failed; fall back to a direct child.
-            let mut cmd = tokio::process::Command::new(&executable);
-            cmd.arg("serve").arg("--socket").arg(&socket_path);
-            cmd.stdin(std::process::Stdio::null());
-            cmd.stdout(std::process::Stdio::null());
-            cmd.stderr(std::process::Stdio::null());
-            cmd.spawn().expect("spawn daemon");
-        }
+    if detached.is_err() || !detached.unwrap().success() {
+        // setsid unavailable or failed; fall back to a direct child.
+        let mut cmd = tokio::process::Command::new(&executable);
+        cmd.arg("serve").arg("--socket").arg(socket_path);
+        cmd.stdin(std::process::Stdio::null());
+        cmd.stdout(std::process::Stdio::null());
+        cmd.stderr(std::process::Stdio::null());
+        cmd.spawn().expect("spawn daemon");
+    }
 
-        for _ in 0..50 {
-            tokio::time::sleep(std::time::Duration::from_millis(100)).await;
-            if socket_path.exists() {
-                break;
-            }
-        }
-
-        if !socket_path.exists() {
-            eprintln!("daemon failed to start");
-            std::process::exit(1);
+    for _ in 0..50 {
+        tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+        if socket_path.exists() {
+            return;
         }
     }
 
-    let stream = tokio::net::UnixStream::connect(&socket_path)
-        .await
-        .expect("connect daemon");
+    eprintln!("daemon failed to start");
+    std::process::exit(1);
+}
+
+async fn run_mcp(socket_path: PathBuf) {
+    // Connect to the running daemon; if that fails (no daemon yet, or a stale
+    // socket file left behind by a killed daemon), start a fresh one. Clients
+    // may sanitize the environment, so the resolved path can differ between
+    // agents — never assume an existing socket is the right one.
+    let mut stream = None;
+    for _ in 0..4 {
+        if let Ok(s) = tokio::net::UnixStream::connect(&socket_path).await {
+            stream = Some(s);
+            break;
+        }
+        tokio::time::sleep(std::time::Duration::from_millis(250)).await;
+    }
+
+    let stream = match stream {
+        Some(stream) => stream,
+        None => {
+            let _ = tokio::fs::remove_file(&socket_path).await;
+            spawn_daemon_detached(&socket_path).await;
+            tokio::net::UnixStream::connect(&socket_path)
+                .await
+                .expect("connect daemon")
+        }
+    };
 
     let (read_half, mut write_half) = stream.into_split();
 

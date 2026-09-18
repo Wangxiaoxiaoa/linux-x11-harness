@@ -1,5 +1,5 @@
 use lxh_core::LxhError;
-use schemars::{schema_for, JsonSchema};
+use schemars::JsonSchema;
 use serde::Deserialize;
 use serde_json::{json, Value};
 
@@ -145,6 +145,41 @@ pub struct ClipboardSetArgs {
     pub text: String,
 }
 
+/// JSON Schema for a tool's arguments, tuned for MCP clients:
+/// subschemas are inlined (no `$ref`/`definitions`) and `Option<T>`
+/// does not become a `null` union, because several clients (e.g.
+/// gemini-cli-based agents) reject or skip schemas they cannot flatten.
+fn root_schema<T: JsonSchema>() -> Value {
+    let settings = schemars::gen::SchemaSettings::draft07().with(|settings| {
+        settings.inline_subschemas = true;
+        settings.option_add_null_type = false;
+        settings.option_nullable = false;
+    });
+    let mut schema =
+        serde_json::to_value(settings.into_generator().into_root_schema_for::<T>()).unwrap();
+    // schemars emits e.g. "format": "uint64"; some MCP clients reject unknown
+    // formats, and no tool relies on format semantics.
+    strip_format(&mut schema);
+    schema
+}
+
+fn strip_format(value: &mut Value) {
+    match value {
+        Value::Object(map) => {
+            map.remove("format");
+            for child in map.values_mut() {
+                strip_format(child);
+            }
+        }
+        Value::Array(items) => {
+            for child in items {
+                strip_format(child);
+            }
+        }
+        _ => {}
+    }
+}
+
 fn tool_def(name: &str, description: &str, schema: Value) -> Value {
     let mut schema = schema;
     if let Some(obj) = schema.as_object_mut() {
@@ -163,142 +198,138 @@ pub fn tool_definitions() -> Vec<Value> {
         tool_def(
             "lxh_display_create",
             "Create a new X11 display. Set persistent to keep it after disconnect.",
-            serde_json::to_value(schema_for!(DisplayCreateArgs)).unwrap(),
+            root_schema::<DisplayCreateArgs>(),
         ),
         tool_def(
             "lxh_display_destroy",
             "Destroy an X11 display",
-            serde_json::to_value(schema_for!(DisplayIdArgs)).unwrap(),
+            root_schema::<DisplayIdArgs>(),
         ),
         tool_def(
             "lxh_display_attach",
             "Attach to an existing X11 display (e.g. :0)",
-            serde_json::to_value(schema_for!(DisplayIdArgs)).unwrap(),
+            root_schema::<DisplayIdArgs>(),
         ),
         tool_def(
             "lxh_display_detach",
             "Detach from an existing X11 display without destroying it",
-            serde_json::to_value(schema_for!(DisplayIdArgs)).unwrap(),
+            root_schema::<DisplayIdArgs>(),
         ),
         tool_def(
             "lxh_app_launch",
             "Launch an application on a display",
-            serde_json::to_value(schema_for!(AppLaunchArgs)).unwrap(),
+            root_schema::<AppLaunchArgs>(),
         ),
         tool_def(
             "lxh_app_terminate",
             "Terminate an application by PID",
-            serde_json::to_value(schema_for!(AppTerminateArgs)).unwrap(),
+            root_schema::<AppTerminateArgs>(),
         ),
         tool_def(
             "lxh_get_window_state",
             "Get window state: metadata, optional AT-SPI tree, optional screenshot",
-            serde_json::to_value(schema_for!(GetWindowStateArgs)).unwrap(),
+            root_schema::<GetWindowStateArgs>(),
         ),
         tool_def(
             "lxh_input_click",
             "Click at screen coordinates. Supports left/right/middle buttons and multiple clicks.",
-            serde_json::to_value(schema_for!(ClickArgs)).unwrap(),
+            root_schema::<ClickArgs>(),
         ),
         tool_def(
             "lxh_input_move",
             "Move the mouse cursor",
-            serde_json::to_value(schema_for!(MoveArgs)).unwrap(),
+            root_schema::<MoveArgs>(),
         ),
-        tool_def(
-            "lxh_input_type",
-            "Type text",
-            serde_json::to_value(schema_for!(TypeArgs)).unwrap(),
-        ),
+        tool_def("lxh_input_type", "Type text", root_schema::<TypeArgs>()),
         tool_def(
             "lxh_input_key",
             "Press a key or key combination",
-            serde_json::to_value(schema_for!(KeyArgs)).unwrap(),
+            root_schema::<KeyArgs>(),
         ),
         tool_def(
             "lxh_input_scroll",
             "Scroll by a delta",
-            serde_json::to_value(schema_for!(ScrollArgs)).unwrap(),
+            root_schema::<ScrollArgs>(),
         ),
         tool_def(
             "lxh_input_drag",
             "Drag from (x1, y1) to (x2, y2)",
-            serde_json::to_value(schema_for!(DragArgs)).unwrap(),
+            root_schema::<DragArgs>(),
         ),
         tool_def(
             "lxh_input_get_cursor_position",
             "Get the current mouse cursor position",
-            serde_json::to_value(schema_for!(DisplayIdArgs)).unwrap(),
+            root_schema::<DisplayIdArgs>(),
         ),
         tool_def(
             "lxh_capture_screenshot",
             "Take a screenshot",
-            serde_json::to_value(schema_for!(DisplayIdArgs)).unwrap(),
+            root_schema::<DisplayIdArgs>(),
         ),
         tool_def(
             "lxh_capture_window",
             "Take a screenshot of a specific window",
-            serde_json::to_value(schema_for!(WindowIdArgs)).unwrap(),
+            root_schema::<WindowIdArgs>(),
         ),
         tool_def(
             "lxh_get_desktop_overview",
             "Return desktop overview: running processes and visible windows",
-            serde_json::to_value(schema_for!(DisplayIdArgs)).unwrap(),
+            root_schema::<DisplayIdArgs>(),
         ),
         tool_def(
             "lxh_set_value",
             "Set the value of an AT-SPI editable element",
-            serde_json::to_value(schema_for!(SetValueArgs)).unwrap(),
+            root_schema::<SetValueArgs>(),
         ),
         tool_def(
             "lxh_click_element",
             "Click an AT-SPI element by pid and index",
-            serde_json::to_value(schema_for!(ClickElementArgs)).unwrap(),
+            root_schema::<ClickElementArgs>(),
         ),
         tool_def(
             "lxh_wait",
             "Wait for a number of milliseconds",
-            serde_json::to_value(schema_for!(WaitArgs)).unwrap(),
+            root_schema::<WaitArgs>(),
         ),
         tool_def(
             "lxh_window_focus",
             "Focus a window by id",
-            serde_json::to_value(schema_for!(WindowIdArgs)).unwrap(),
+            root_schema::<WindowIdArgs>(),
         ),
         tool_def(
             "lxh_window_set_frame",
             "Set a window's position and size",
-            serde_json::to_value(schema_for!(SetWindowFrameArgs)).unwrap(),
+            root_schema::<SetWindowFrameArgs>(),
         ),
         tool_def(
             "lxh_window_close",
             "Close a window by id",
-            serde_json::to_value(schema_for!(WindowIdArgs)).unwrap(),
+            root_schema::<WindowIdArgs>(),
         ),
         tool_def(
             "lxh_clipboard_get",
             "Get text from the clipboard",
-            serde_json::to_value(schema_for!(DisplayIdArgs)).unwrap(),
+            root_schema::<DisplayIdArgs>(),
         ),
         tool_def(
             "lxh_clipboard_set",
             "Set text on the clipboard",
-            serde_json::to_value(schema_for!(ClipboardSetArgs)).unwrap(),
+            root_schema::<ClipboardSetArgs>(),
         ),
         tool_def(
             "lxh_display_info",
             "Get display metadata",
-            serde_json::to_value(schema_for!(DisplayIdArgs)).unwrap(),
+            root_schema::<DisplayIdArgs>(),
         ),
         tool_def(
             "lxh_preview_open",
             "Open a preview window for a display if not already open",
-            serde_json::to_value(schema_for!(DisplayIdArgs)).unwrap(),
+            root_schema::<DisplayIdArgs>(),
         ),
         tool_def(
             "lxh_preview_close",
             "Close the preview window for a display",
-            serde_json::to_value(schema_for!(DisplayIdArgs)).unwrap(),
+            root_schema::<DisplayIdArgs>(),
         ),
     ]
 }
@@ -367,5 +398,34 @@ mod tests {
         let args = json!({"display_id": "d-1"}); // missing command
         let err = parse_args::<AppLaunchArgs>(&args).unwrap_err();
         assert!(matches!(err, LxhError::InvalidArgument(_)));
+    }
+}
+
+#[cfg(test)]
+mod schema_tests {
+    use super::*;
+
+    #[test]
+    fn schemas_are_client_friendly() {
+        for def in tool_definitions() {
+            let schema = &def["inputSchema"];
+            let raw = serde_json::to_string(schema).unwrap();
+            assert!(!raw.contains("\"$ref\""), "{} has $ref: {raw}", def["name"]);
+            assert!(
+                !raw.contains("definitions"),
+                "{} has definitions",
+                def["name"]
+            );
+            assert!(!raw.contains("format"), "{} has format: {raw}", def["name"]);
+            let props = schema["properties"].as_object().expect("properties object");
+            for (name, prop) in props {
+                assert!(
+                    prop.get("type").is_some(),
+                    "{}.{} has no type: {prop}",
+                    def["name"],
+                    name
+                );
+            }
+        }
     }
 }

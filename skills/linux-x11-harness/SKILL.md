@@ -16,6 +16,27 @@ Use this skill when you need to control Linux GUI applications without touching 
 - Send mouse, keyboard, or clipboard input to a GUI app.
 - Read the AT-SPI accessibility tree or click UI elements programmatically.
 
+## How to call the tools
+
+The `lxh_*` tools are served by a background daemon. Depending on your agent's
+capability you use one of these transports:
+
+- **MCP agents**: the server is registered as `linux-x11-harness`; call the
+  tools directly as MCP tools.
+- **Agents without MCP support** (skill only): call the daemon socket from
+  your shell with the bundled helper next to this file:
+
+  ```bash
+  python3 <this-skill-directory>/lxh.py lxh_display_create '{"persistent": true}'
+  python3 <this-skill-directory>/lxh.py lxh_app_launch \
+      '{"display_id": "d-...", "command": "xterm"}'
+  ```
+
+  The helper speaks JSON-RPC over the Unix socket (default
+  `$XDG_RUNTIME_DIR/linux-x11-harness.sock`, override with `LXH_SOCKET_PATH`)
+  and prints the tool result as JSON. Never start your own Xvfb — always go
+  through the daemon, or you lose isolation and the preview.
+
 ## Lifecycle
 
 Always follow this order:
