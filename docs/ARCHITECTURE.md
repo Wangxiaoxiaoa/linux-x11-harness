@@ -300,6 +300,8 @@ All tools are prefixed with `lxh_`.
 | `lxh_display_detach` | Detach from an existing display without destroying it | `display_id` |
 | `lxh_display_destroy` | Destroy display | `display_id` |
 | `lxh_display_info` | Resolution and app count | `display_id` |
+| `lxh_preview_open` | Open (or reopen) the preview window for a display | `display_id` |
+| `lxh_preview_close` | Close the preview window without touching the display | `display_id` |
 | `lxh_app_launch` | Launch an application | `display_id`, `command` |
 | `lxh_app_terminate` | Terminate by PID | `display_id`, `pid` |
 | `lxh_input_click` | Click at `(x, y)` with optional button/count | `display_id`, `x`, `y`, `button`, `count` |

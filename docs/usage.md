@@ -31,7 +31,16 @@ To run a fully separate daemon process, use a unique socket:
 ./target/release/linux-x11-harness stop --socket /tmp/lxh-agent-1.sock
 ```
 
-`--socket` overrides the default `/tmp/linux-x11-harness.sock` and the `LXH_SOCKET_PATH` environment variable.
+`--socket` overrides the default socket path (`$XDG_RUNTIME_DIR/linux-x11-harness.sock`, falling back to `/tmp/linux-x11-harness.sock`) and the `LXH_SOCKET_PATH` environment variable.
+
+## Display preview
+
+Displays created on this machine automatically open a read-only preview window on your desktop, scaled to a fraction of your screen (aspect ratio preserved). The preview is rendered by the daemon and never touches the display's lifecycle.
+
+- Double-click the preview to zoom it; double-click again to restore.
+- Closing the preview window (or calling `lxh_preview_close`) does not affect the display.
+- Reopen it later with `lxh_preview_open`.
+- The preview requires a running desktop session (`DISPLAY`). On headless hosts no preview is created and everything else works as usual.
 
 ## Example MCP session
 

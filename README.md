@@ -17,9 +17,12 @@
 
 `linux-x11-harness` creates isolated X11 displays and lets AI agents control GUI applications. Each display gets its own X server, window manager, and application process group, so agents can click, type, capture screenshots, and read accessibility trees without touching the host desktop.
 
+A read-only preview window opens on your desktop while the agent works, so you can watch every click and screenshot in real time.
+
 Typical uses:
 
 - Let an agent operate a GUI app without taking over your real desktop.
+- Watch what the agent is doing live in a small preview window.
 - Run end-to-end tests that need real input, focus, and screenshots.
 - Capture accessibility trees or screen recordings for verification.
 
@@ -64,7 +67,7 @@ linux-x11-harness stop    # stop the daemon
 
 ## Documentation
 
-- [Usage guide](docs/usage.md) — configure displays, backends, and multi-agent isolation.
+- [Usage guide](docs/usage.md) — display previews, sockets, and multi-agent isolation.
 - [Agent skill](skills/linux-x11-harness/SKILL.md) — quick reference for agents.
 - [Architecture](docs/ARCHITECTURE.md) — crate layout and design notes.
 
