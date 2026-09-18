@@ -12,10 +12,12 @@ pub use display::{Display, DisplayConfig, DisplayKind};
 
 fn process_scoped_display_start() -> u32 {
     // Use the process id so that concurrent daemon instances do not collide
-    // on the low display numbers starting at :99. X11 display numbers must
-    // stay below 65536, so the modulo keeps the range inside [100, 65099].
+    // on the low display numbers starting at :99. Two constraints: display
+    // numbers must stay below 65536, and x11rb computes the TCP port as
+    // 6000 + display in u16, so keep 6000 + display < 65536
+    // (i.e. display <= 59535, hence the 59_400 range from base 100).
     let pid = std::process::id();
-    100 + (pid % 65_000)
+    100 + (pid % 59_400)
 }
 
 pub struct Runtime {
