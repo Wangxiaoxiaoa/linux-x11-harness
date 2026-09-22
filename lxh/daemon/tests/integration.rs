@@ -120,10 +120,36 @@ fn find_window_with_title_prefix(conn: &RustConnection, root: u32, prefix: &str)
 
 async fn wait_for_preview_window(conn: &RustConnection, root: u32) -> Option<u32> {
     for _ in 0..40 {
-        if let Some(win) = find_window_with_title_prefix(conn, root, "LXH") {
+        if let Some(win) = find_cell_window(conn, root) {
             return Some(win);
         }
         tokio::time::sleep(Duration::from_millis(100)).await;
+    }
+    None
+}
+
+/// Find a preview cell window (any "LXH*" window that is not the container).
+fn find_cell_window(conn: &RustConnection, root: u32) -> Option<u32> {
+    find_window_matching(conn, root, &|title| {
+        title.starts_with("LXH") && title != "LXH Previews"
+    })
+}
+
+fn find_window_matching(
+    conn: &RustConnection,
+    root: u32,
+    pred: &impl Fn(&str) -> bool,
+) -> Option<u32> {
+    let tree = conn.query_tree(root).ok()?.reply().ok()?;
+    for win in tree.children {
+        if let Some(title) = window_title(conn, win) {
+            if pred(&title) {
+                return Some(win);
+            }
+        }
+        if let Some(found) = find_window_matching(conn, win, pred) {
+            return Some(found);
+        }
     }
     None
 }
@@ -138,47 +164,6 @@ async fn wait_until_window_gone(conn: &RustConnection, root: u32) -> bool {
     false
 }
 
-async fn wait_for_geometry(
-    conn: &RustConnection,
-    win: u32,
-    matches: impl Fn(u32, u32) -> bool,
-) -> bool {
-    for _ in 0..40 {
-        if let Ok(reply) = conn.get_geometry(win) {
-            if let Ok(geom) = reply.reply() {
-                if matches(geom.width as u32, geom.height as u32) {
-                    return true;
-                }
-            }
-        }
-        tokio::time::sleep(Duration::from_millis(100)).await;
-    }
-    false
-}
-
-/// Two rapid synthetic clicks on the preview window centre.
-fn double_click(conn: &RustConnection, root: u32, win: u32) {
-    let geom = conn.get_geometry(win).unwrap().reply().unwrap();
-    let reply = conn
-        .translate_coordinates(win, root, 0, 0)
-        .unwrap()
-        .reply()
-        .unwrap();
-    let cx = reply.dst_x + geom.width as i16 / 2;
-    let cy = reply.dst_y + geom.height as i16 / 2;
-    for _ in 0..2 {
-        conn.xtest_fake_input(MOTION_NOTIFY_EVENT, 0, 0, root, cx, cy, 0)
-            .unwrap();
-        conn.xtest_fake_input(BUTTON_PRESS_EVENT, 1, 0, root, cx, cy, 0)
-            .unwrap();
-        conn.xtest_fake_input(BUTTON_RELEASE_EVENT, 1, 0, root, cx, cy, 0)
-            .unwrap();
-    }
-    conn.flush().unwrap();
-}
-
-/// A dedicated "user side" X server the preview renders into. Harness
-/// displays are always numbered >= :100, so low numbers never collide.
 struct UserXvfb {
     display_str: String,
     child: tokio::process::Child,
@@ -647,11 +632,7 @@ async fn desktop_overview_lists_launched_app() {
 }
 
 use x11rb::connection::Connection as X11Connection;
-use x11rb::protocol::xproto::{
-    AtomEnum, ConnectionExt, MapState, QueryTreeReply, Window, BUTTON_PRESS_EVENT,
-    BUTTON_RELEASE_EVENT, MOTION_NOTIFY_EVENT,
-};
-use x11rb::protocol::xtest::ConnectionExt as _;
+use x11rb::protocol::xproto::{AtomEnum, ConnectionExt, MapState, QueryTreeReply, Window};
 use x11rb::rust_connection::RustConnection;
 
 fn find_xterm_window(display: &str) -> Option<u64> {
@@ -1047,7 +1028,7 @@ async fn daemon_detaches_from_proxy_process_tree() {
 }
 
 #[tokio::test]
-async fn preview_window_lifecycle_and_zoom() {
+async fn preview_panel_lifecycle() {
     let xvfb = spawn_user_xvfb().await;
     let daemon = DaemonGuard::new_with_display(Some(&xvfb.display_str)).await;
     let mut conn = daemon.connect().await;
@@ -1060,60 +1041,48 @@ async fn preview_window_lifecycle_and_zoom() {
         RustConnection::connect(Some(&xvfb.display_str)).expect("connect user display");
     let root = user_conn.setup().roots[screen].root;
 
-    // 1280x800 user screen, 1280x800 harness display -> 1/8 = 160x100.
+    // 1280x800 user screen, 1280x800 harness display -> cell box is
+    // screen/8 = 160x100 and the fitted content keeps that exact size.
     let normal = (160u32, 100u32);
     let win = wait_for_preview_window(&user_conn, root)
         .await
-        .expect("preview window did not appear");
+        .expect("preview cell did not appear");
     let geom = user_conn.get_geometry(win).unwrap().reply().unwrap();
     assert_eq!(
         (geom.width as u32, geom.height as u32),
         normal,
-        "preview window is not the expected fixed size"
+        "preview cell is not the expected adaptive size"
     );
 
-    // Tool close removes the window, tool open brings it back.
+    // Tool close tears down the cell AND the (now empty) container.
     conn.call_tool("lxh_preview_close", json!({"display_id": display_id}))
         .await;
     assert!(
         wait_until_window_gone(&user_conn, root).await,
-        "preview window still present after lxh_preview_close"
+        "preview windows still present after lxh_preview_close"
     );
+
+    // Tool open recreates container + cell.
     conn.call_tool("lxh_preview_open", json!({"display_id": display_id}))
         .await;
     let win = wait_for_preview_window(&user_conn, root)
         .await
-        .expect("preview window did not reopen");
+        .expect("preview cell did not reopen");
 
-    // A user closing the window (DestroyNotify) must be noticed by the
+    // A user closing the cell window (DestroyNotify) must be noticed by the
     // daemon, and reopening must create a fresh window.
     user_conn.destroy_window(win).unwrap();
     user_conn.flush().unwrap();
     assert!(
         wait_until_window_gone(&user_conn, root).await,
-        "preview window was not destroyed"
+        "preview cell was not destroyed"
     );
     conn.call_tool("lxh_preview_open", json!({"display_id": display_id}))
         .await;
     let win = wait_for_preview_window(&user_conn, root)
         .await
-        .expect("preview window did not reopen after external close");
-
-    // Double click zooms well past the fixed size, double click again
-    // restores the exact fixed size.
-    double_click(&user_conn, root, win);
-    assert!(
-        wait_for_geometry(&user_conn, win, |w, h| (w * h) > normal.0 * normal.1 * 4).await,
-        "double click did not zoom the preview"
-    );
-    let win = wait_for_preview_window(&user_conn, root)
-        .await
-        .expect("preview window vanished while zoomed");
-    double_click(&user_conn, root, win);
-    assert!(
-        wait_for_geometry(&user_conn, win, |w, h| (w, h) == normal).await,
-        "double click did not restore the preview size"
-    );
+        .expect("preview cell did not reopen after external close");
+    let _ = win;
 
     // The preview dies with its display.
     conn.call_tool("lxh_display_destroy", json!({"display_id": display_id}))

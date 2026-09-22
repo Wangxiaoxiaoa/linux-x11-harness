@@ -9,7 +9,7 @@ use crate::tools::{
 };
 use lxh_core::{Driver, LxhError, MouseButton};
 use lxh_driver::DefaultDriver;
-use lxh_preview::PreviewManager;
+use lxh_preview::PreviewPanel;
 use lxh_runtime::{Display, DisplayConfig, Runtime};
 use serde_json::{json, Value};
 use tokio::sync::{Mutex, RwLock};
@@ -18,7 +18,7 @@ pub struct DaemonState {
     pub runtime: Arc<Runtime>,
     pub displays: Arc<RwLock<HashMap<String, Arc<Mutex<Display>>>>>,
     pub drivers: Arc<RwLock<HashMap<String, Arc<dyn Driver>>>>,
-    pub previews: Arc<PreviewManager>,
+    pub previews: Arc<PreviewPanel>,
 }
 
 pub struct ClientSession {

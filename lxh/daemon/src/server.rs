@@ -3,7 +3,7 @@ use std::path::PathBuf;
 use std::sync::Arc;
 
 use lxh_core::LxhError;
-use lxh_preview::PreviewManager;
+use lxh_preview::PreviewPanel;
 use lxh_runtime::Runtime;
 use serde_json::{json, Value};
 use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
@@ -25,7 +25,7 @@ impl DaemonServer {
                 runtime,
                 displays: Arc::new(RwLock::new(HashMap::new())),
                 drivers: Arc::new(RwLock::new(HashMap::new())),
-                previews: Arc::new(PreviewManager::new()),
+                previews: Arc::new(PreviewPanel::new()),
             }),
             socket_path,
         }
