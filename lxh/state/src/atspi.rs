@@ -17,6 +17,15 @@ pub struct Element {
 }
 
 pub async fn walk_tree(pid: u32) -> Result<Vec<Element>, LxhError> {
+    // Zero tolerance for stale targets: an exited process may still be
+    // registered in AT-SPI for a while; fail with a clear error instead of
+    // returning an empty or half-valid tree.
+    if !std::path::Path::new(&format!("/proc/{pid}")).exists() {
+        return Err(LxhError::InvalidArgument(format!(
+            "pid {pid} is not running (the application may have exited)"
+        )));
+    }
+
     let conn = AccessibilityConnection::new()
         .await
         .map_err(|e| LxhError::ProcessSpawnFailed(e.to_string()))?;
@@ -187,6 +196,112 @@ pub async fn set_value(pid: u32, index: usize, value: &str) -> Result<(), LxhErr
 
     editable
         .set_text_contents(value)
+        .await
+        .map_err(|_| LxhError::NotSupported)?;
+
+    Ok(())
+}
+
+/// Resolve an application menu path (e.g. ["File", "Open"]) through
+/// AT-SPI and invoke the final item. Path segments are matched against
+/// direct children after trimming whitespace; matching is case-sensitive.
+/// The menu bar itself is located by role ("menu bar"); if the application
+/// has no menu bar the error says so.
+pub async fn invoke_menu(pid: u32, path: &[String]) -> Result<(), LxhError> {
+    if path.is_empty() {
+        return Err(LxhError::InvalidArgument(
+            "menu path must not be empty".into(),
+        ));
+    }
+
+    let elements = walk_tree(pid).await?;
+    let bar = elements
+        .iter()
+        .find(|e| e.role == "menu bar")
+        .ok_or_else(|| {
+            LxhError::InvalidArgument(format!("pid {pid} has no application menu bar"))
+        })?;
+
+    let mut current = bar.index;
+    for (depth, segment) in path.iter().enumerate() {
+        let wanted = segment.trim();
+        let child = elements
+            .iter()
+            .find(|e| e.parent_index == Some(current) && e.name.as_deref() == Some(wanted))
+            .ok_or_else(|| {
+                LxhError::InvalidArgument(format!(
+                    "menu path not found at segment {depth} ({}): no entry named {:?} under index {current}",
+                    path[..=depth].join(" > "),
+                    wanted
+                ))
+            })?;
+        current = child.index;
+    }
+
+    let target = &elements[current];
+    let action_name = target
+        .actions
+        .iter()
+        .find(|a| a.as_str() == "press")
+        .or_else(|| target.actions.first())
+        .ok_or_else(|| {
+            LxhError::InvalidArgument(format!(
+                "menu item {:?} exposes no AT-SPI action to invoke",
+                target.name
+            ))
+        })?;
+
+    let conn = AccessibilityConnection::new()
+        .await
+        .map_err(|e| LxhError::ProcessSpawnFailed(e.to_string()))?;
+    let root = conn
+        .root_accessible_on_registry()
+        .await
+        .map_err(|e| LxhError::ProcessSpawnFailed(e.to_string()))?;
+    let dbus = atspi::zbus::fdo::DBusProxy::new(conn.connection())
+        .await
+        .map_err(|e| LxhError::ProcessSpawnFailed(e.to_string()))?;
+    let children = root
+        .get_children()
+        .await
+        .map_err(|e| LxhError::ProcessSpawnFailed(e.to_string()))?;
+    let mut app = None;
+    for child_ref in children {
+        if pid_of(&dbus, &child_ref).await == Some(pid) {
+            app = Some(
+                conn.object_as_accessible(&child_ref)
+                    .await
+                    .map_err(|e| LxhError::ProcessSpawnFailed(e.to_string()))?,
+            );
+            break;
+        }
+    }
+    let app = app.ok_or_else(|| LxhError::DisplayNotFound(format!("pid {}", pid)))?;
+
+    let node = walk_to_index(&conn, &app, current)
+        .await?
+        .ok_or(LxhError::NotSupported)?;
+    let proxies = node.proxies().await.map_err(|_| LxhError::NotSupported)?;
+    let action = proxies.action().await.map_err(|_| LxhError::NotSupported)?;
+
+    // Invoke the action chosen from the element snapshot; match it by name
+    // against the live object so the index stays honest.
+    let n = action
+        .n_actions()
+        .await
+        .map_err(|_| LxhError::NotSupported)?;
+    let mut index_of = None;
+    for i in 0..n {
+        if let Ok(name) = action.get_name(i).await {
+            if name == *action_name {
+                index_of = Some(i);
+                break;
+            }
+        }
+    }
+    let index_of = index_of.ok_or(LxhError::NotSupported)?;
+    action
+        .do_action(index_of)
         .await
         .map_err(|_| LxhError::NotSupported)?;
 

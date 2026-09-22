@@ -191,6 +191,8 @@ async fn dispatch_tool_call(
         "lxh_display_info" => handlers::display_info(state, args).await,
         "lxh_preview_open" => handlers::preview_open(state, session, args).await,
         "lxh_preview_close" => handlers::preview_close(state, args).await,
+        "lxh_invoke_menu" => handlers::invoke_menu(state, args).await,
+        "lxh_verify_state" => handlers::verify_state(state, args).await,
         "lxh_get_window_state" => handlers::get_window_state(state, args).await,
         "lxh_list_apps" => Ok(handlers::list_apps()),
         "lxh_get_desktop_overview" => handlers::get_desktop_overview(state, args).await,

@@ -4,10 +4,12 @@ use std::sync::Arc;
 use crate::tools::{
     parse_args, tool_definitions as tools_tool_definitions, AppLaunchArgs, AppTerminateArgs,
     ClickArgs, ClickElementArgs, ClipboardSetArgs, DesktopOverviewArgs, DisplayCreateArgs,
-    DisplayIdArgs, DragArgs, GetWindowStateArgs, KeyArgs, MoveArgs, ScrollArgs, SetValueArgs,
-    SetWindowFrameArgs, TypeArgs, WaitArgs, WindowIdArgs, ZoomArgs,
+    DisplayIdArgs, DragArgs, GetWindowStateArgs, InvokeMenuArgs, KeyArgs, MoveArgs, ScrollArgs,
+    SetValueArgs, SetWindowFrameArgs, TypeArgs, VerifyStateArgs, WaitArgs, WindowIdArgs, ZoomArgs,
 };
-use lxh_core::{Driver, LxhError, MouseButton};
+use lxh_core::{
+    Driver, ElementExpectation, LxhError, MouseButton, StateExpectation, WindowExpectation,
+};
 use lxh_driver::DefaultDriver;
 use lxh_preview::PreviewPanel;
 use lxh_runtime::{Display, DisplayConfig, Runtime};
@@ -335,6 +337,56 @@ fn resolve_coord(
     let dx = ctx.display_x + (x / ctx.scale).round() as i32;
     let dy = ctx.display_y + (y / ctx.scale).round() as i32;
     Ok((dx as i64, dy as i64))
+}
+
+pub async fn invoke_menu(state: &DaemonState, args: &Value) -> Result<Value, LxhError> {
+    let args: InvokeMenuArgs = parse_args(args)?;
+    let driver = find_driver(state, &args.display_id).await?;
+    driver.invoke_menu(args.pid, &args.path).await?;
+    Ok(json!({ "success": true }))
+}
+
+pub async fn verify_state(state: &DaemonState, args: &Value) -> Result<Value, LxhError> {
+    let args: VerifyStateArgs = parse_args(args)?;
+    for (i, e) in args.expect.iter().enumerate() {
+        if let Some(w) = &e.window {
+            if w.exists == Some(false) {
+                return Err(LxhError::InvalidArgument(format!(
+                    "expect[{i}].window.exists=false cannot be verified (absence is not \
+                     provable); only true is accepted"
+                )));
+            }
+        }
+    }
+    if args.expect.is_empty() || args.expect.len() > 8 {
+        return Err(LxhError::InvalidArgument(
+            "expect requires 1 to 8 predicates".into(),
+        ));
+    }
+
+    let driver = find_driver(state, &args.display_id).await?;
+    let expect: Vec<StateExpectation> = args
+        .expect
+        .iter()
+        .map(|e| StateExpectation {
+            window: e.window.as_ref().map(|w| WindowExpectation {
+                exists: w.exists.unwrap_or(true),
+                title_contains: w.title_contains.clone(),
+            }),
+            element: e.element.as_ref().map(|el| ElementExpectation {
+                role: el.role.clone(),
+                label_contains: el.label_contains.clone(),
+            }),
+        })
+        .collect();
+
+    let result = driver.verify_state(args.pid, &expect).await?;
+    let results: Vec<Value> = result
+        .results
+        .iter()
+        .map(|(satisfied, observed)| json!({ "satisfied": satisfied, "observed": observed }))
+        .collect();
+    Ok(json!({ "status": result.status, "results": results }))
 }
 
 pub async fn window_focus(state: &DaemonState, args: &Value) -> Result<Value, LxhError> {

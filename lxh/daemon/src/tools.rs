@@ -41,6 +41,55 @@ pub struct DesktopOverviewArgs {
 pub struct ListAppsArgs {}
 
 #[derive(Debug, Deserialize, JsonSchema)]
+pub struct InvokeMenuArgs {
+    pub display_id: String,
+    pub pid: u32,
+    /// Menu path from the application menu bar, e.g. ["File", "Open"].
+    /// Segments are matched case-sensitively after trimming whitespace.
+    pub path: Vec<String>,
+}
+
+/// One state assertion. At least one of window/element should be present.
+#[derive(Debug, Deserialize, JsonSchema)]
+pub struct StateExpectationArgs {
+    /// Window predicate for the pid's managed window.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub window: Option<WindowExpectationArgs>,
+    /// Element predicate against the AT-SPI tree.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub element: Option<ElementExpectationArgs>,
+}
+
+#[derive(Debug, Deserialize, JsonSchema)]
+pub struct WindowExpectationArgs {
+    /// The window must exist. Note: absence cannot be proven reliably;
+    /// only true is accepted.
+    #[serde(default)]
+    pub exists: Option<bool>,
+    /// The window title must contain this string.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub title_contains: Option<String>,
+}
+
+#[derive(Debug, Deserialize, JsonSchema)]
+pub struct ElementExpectationArgs {
+    /// The element's AT-SPI role must equal this string (e.g. "button").
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub role: Option<String>,
+    /// Some element's name must contain this string.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub label_contains: Option<String>,
+}
+
+#[derive(Debug, Deserialize, JsonSchema)]
+pub struct VerifyStateArgs {
+    pub display_id: String,
+    pub pid: u32,
+    /// One to eight predicates, combined with logical AND.
+    pub expect: Vec<StateExpectationArgs>,
+}
+
+#[derive(Debug, Deserialize, JsonSchema)]
 pub struct ZoomArgs {
     pub display_id: String,
     pub window_id: u64,
@@ -222,7 +271,60 @@ fn tool_def(name: &str, description: &str, schema: Value) -> Value {
     json!({
         "name": name,
         "description": description,
-        "inputSchema": schema
+        "inputSchema": schema,
+        "annotations": annotations_for(name),
+    })
+}
+
+/// MCP behavior hints per tool. Every tool operates on harness displays the
+/// daemon owns, so the world stays closed.
+fn annotations_for(name: &str) -> Value {
+    let read_only = matches!(
+        name,
+        "lxh_display_info"
+            | "lxh_list_apps"
+            | "lxh_get_desktop_overview"
+            | "lxh_get_window_state"
+            | "lxh_capture_screenshot"
+            | "lxh_capture_window"
+            | "lxh_zoom"
+            | "lxh_clipboard_get"
+            | "lxh_input_get_cursor_position"
+            | "lxh_wait"
+            | "lxh_verify_state"
+    );
+    let destructive = matches!(
+        name,
+        "lxh_display_destroy" | "lxh_app_terminate" | "lxh_window_close"
+    );
+    let idempotent = matches!(
+        name,
+        "lxh_display_info"
+            | "lxh_list_apps"
+            | "lxh_get_desktop_overview"
+            | "lxh_get_window_state"
+            | "lxh_capture_screenshot"
+            | "lxh_capture_window"
+            | "lxh_zoom"
+            | "lxh_clipboard_get"
+            | "lxh_clipboard_set"
+            | "lxh_input_get_cursor_position"
+            | "lxh_input_move"
+            | "lxh_wait"
+            | "lxh_verify_state"
+            | "lxh_set_value"
+            | "lxh_window_focus"
+            | "lxh_window_set_frame"
+            | "lxh_preview_open"
+            | "lxh_preview_close"
+            | "lxh_display_attach"
+            | "lxh_display_detach"
+    );
+    json!({
+        "readOnlyHint": read_only,
+        "destructiveHint": destructive,
+        "idempotentHint": idempotent,
+        "openWorldHint": false,
     })
 }
 
@@ -322,6 +424,22 @@ pub fn tool_definitions() -> Vec<Value> {
             root_schema::<ListAppsArgs>(),
         ),
         tool_def(
+            "lxh_invoke_menu",
+            "Resolve an application menu path (e.g. [\"File\", \"Open\"]) through AT-SPI \
+             and invoke the final item. Path segments are matched case-sensitively \
+             against direct children of the menu bar; fails with the exact segment \
+             when not found.",
+            root_schema::<InvokeMenuArgs>(),
+        ),
+        tool_def(
+            "lxh_verify_state",
+            "Assert read-only state predicates for a process: window (exists, \
+             title_contains) and AT-SPI element (role, label_contains), combined with \
+             logical AND. Returns per-predicate outcomes with the observed state. \
+             Single sample; call lxh_wait between attempts if the UI is still settling.",
+            root_schema::<VerifyStateArgs>(),
+        ),
+        tool_def(
             "lxh_get_desktop_overview",
             "Return desktop overview: running processes and windows. Stale windows from \
              exited processes are never returned. Each window record includes window_id, pid, \
@@ -398,12 +516,14 @@ mod tests {
     #[test]
     fn tool_definitions_has_expected_tools() {
         let defs = tool_definitions();
-        assert_eq!(defs.len(), 30, "expected 30 tool definitions");
+        assert_eq!(defs.len(), 32, "expected 32 tool definitions");
 
         let names: Vec<&str> = defs.iter().map(|d| d["name"].as_str().unwrap()).collect();
         assert!(names.contains(&"lxh_display_create"));
         assert!(names.contains(&"lxh_list_apps"));
         assert!(names.contains(&"lxh_zoom"));
+        assert!(names.contains(&"lxh_invoke_menu"));
+        assert!(names.contains(&"lxh_verify_state"));
         assert!(names.contains(&"lxh_input_click"));
         assert!(names.contains(&"lxh_capture_screenshot"));
         assert!(names.contains(&"lxh_clipboard_get"));

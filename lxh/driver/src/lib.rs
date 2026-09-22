@@ -3,7 +3,7 @@ use lxh_action::{ArboardClipboard, X11WindowManager, XtestInput};
 use lxh_core::{
     A11yDriver, Bounds, CaptureDriver, ClipboardDriver, DesktopOverview, Driver,
     GetWindowStateResult, InputDriver, LxhError, MouseButton, RegionCapture, Screenshot,
-    WindowDriver,
+    StateExpectation, VerificationResult, WindowDriver,
 };
 use lxh_state::{AtspiA11y, X11Capture};
 
@@ -139,6 +139,18 @@ impl A11yDriver for DefaultDriver {
 
     async fn element_frame(&self, pid: u32, index: usize) -> Result<Bounds, LxhError> {
         self.a11y.element_frame(pid, index).await
+    }
+
+    async fn invoke_menu(&self, pid: u32, path: &[String]) -> Result<(), LxhError> {
+        self.a11y.invoke_menu(pid, path).await
+    }
+
+    async fn verify_state(
+        &self,
+        pid: u32,
+        expect: &[StateExpectation],
+    ) -> Result<VerificationResult, LxhError> {
+        self.a11y.verify_state(pid, expect).await
     }
 }
 

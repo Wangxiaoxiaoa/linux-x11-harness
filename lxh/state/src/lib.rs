@@ -2,7 +2,7 @@ use async_trait::async_trait;
 use image::{ImageEncoder, RgbImage};
 use lxh_core::{
     x11, A11yDriver, Bounds, CaptureDriver, DesktopOverview, GetWindowStateResult, LxhError,
-    ProcessEntry, RegionCapture, Screenshot, WindowEntry,
+    ProcessEntry, RegionCapture, Screenshot, StateExpectation, VerificationResult, WindowEntry,
 };
 use tokio::task;
 use x11rb::connection::Connection;
@@ -266,69 +266,19 @@ impl A11yDriver for AtspiA11y {
             let (conn, screen) = x11::open_connection(&display)?;
             let root = conn.setup().roots[screen].root;
 
-            let net_wm_name = conn
-                .intern_atom(false, b"_NET_WM_NAME")
-                .map_err(x11::xerr)?
-                .reply()
-                .map_err(x11::xerr)?
-                .atom;
-            let utf8 = conn
-                .intern_atom(false, b"UTF8_STRING")
-                .map_err(x11::xerr)?
-                .reply()
-                .map_err(x11::xerr)?
-                .atom;
-
-            // Managed windows in stacking order (bottom to top), maintained
-            // by the WM. Tree-walking the root would also surface helper
-            // windows (e.g. GTK CSD shadows) that are not real app windows.
-            let client_list = conn
-                .intern_atom(false, b"_NET_CLIENT_LIST_STACKING")
-                .map_err(x11::xerr)?
-                .reply()
-                .map_err(x11::xerr)?
-                .atom;
-            let client_windows = conn
-                .get_property(false, root, client_list, AtomEnum::WINDOW, 0, 4096)
-                .map_err(x11::xerr)?
-                .reply()
-                .ok()
-                .map(|r| {
-                    r.value
-                        .as_chunks::<4>()
-                        .0
-                        .iter()
-                        .map(|b| u32::from_ne_bytes(*b))
-                        .collect::<Vec<u32>>()
-                })
-                .unwrap_or_default();
-
             // Exited applications can keep their windows alive in X11 as
             // zombies; never return stale targets to callers.
             let processes = list_processes();
 
             let mut windows = Vec::new();
-            for (z_index, &window) in client_windows.iter().enumerate() {
-                let pid = pid_of_window(&conn, window).ok();
+            for (z_index, (window, pid, title)) in
+                managed_windows(&conn, root)?.into_iter().enumerate()
+            {
                 if let Some(pid) = pid {
                     if !processes.iter().any(|p| p.pid == pid) {
                         continue;
                     }
                 }
-
-                let title = if let Ok(cookie) =
-                    conn.get_property(false, window, net_wm_name, utf8, 0, 1024)
-                {
-                    cookie.reply().ok().and_then(|r| {
-                        if r.value.is_empty() {
-                            None
-                        } else {
-                            String::from_utf8(r.value).ok()
-                        }
-                    })
-                } else {
-                    None
-                };
 
                 let on_screen = conn
                     .get_window_attributes(window)
@@ -358,7 +308,7 @@ impl A11yDriver for AtspiA11y {
                 windows.push(WindowEntry {
                     id: window,
                     pid,
-                    title,
+                    title: if title.is_empty() { None } else { Some(title) },
                     bounds: Some(bounds),
                     z_index,
                     on_screen,
@@ -373,6 +323,93 @@ impl A11yDriver for AtspiA11y {
 
     async fn set_value(&self, pid: u32, index: usize, value: &str) -> Result<(), LxhError> {
         atspi::set_value(pid, index, value).await
+    }
+
+    async fn invoke_menu(&self, pid: u32, path: &[String]) -> Result<(), LxhError> {
+        atspi::invoke_menu(pid, path).await
+    }
+
+    async fn verify_state(
+        &self,
+        pid: u32,
+        expect: &[StateExpectation],
+    ) -> Result<VerificationResult, LxhError> {
+        // Element predicate: evaluated against the live AT-SPI tree (async).
+        let element_expect = expect.iter().find_map(|e| e.element.as_ref());
+        let element_outcome = match element_expect {
+            Some(expected) => match atspi::walk_tree(pid).await {
+                Ok(elements) => {
+                    let matched = elements.iter().any(|e| {
+                        expected
+                            .role
+                            .as_ref()
+                            .is_none_or(|r| e.role.eq_ignore_ascii_case(r))
+                            && expected.label_contains.as_ref().is_none_or(|label| {
+                                e.name
+                                    .as_deref()
+                                    .is_some_and(|n| n.contains(label.as_str()))
+                            })
+                    });
+                    let observed = if matched {
+                        "matching element found".to_string()
+                    } else {
+                        "no matching element".to_string()
+                    };
+                    (matched, observed)
+                }
+                Err(e) => (false, format!("a11y tree unavailable: {e}")),
+            },
+            None => (true, "no element predicate".to_string()),
+        };
+
+        // Window predicate: X11 round-trip on a blocking thread.
+        let display = self.display.clone();
+        let window_expect = expect.iter().find_map(|e| e.window.as_ref()).cloned();
+        let window_outcome = task::spawn_blocking(move || -> Result<(bool, String), LxhError> {
+            let Some(expected) = window_expect else {
+                return Ok((true, "no window predicate".to_string()));
+            };
+            let (conn, screen) = x11::open_connection(&display)?;
+            let root = conn.setup().roots[screen].root;
+
+            let mut titles = Vec::new();
+            let mut exists = false;
+            for (_, window_pid, title) in managed_windows(&conn, root)? {
+                if window_pid != Some(pid) {
+                    continue;
+                }
+                titles.push(title.clone());
+                if expected
+                    .title_contains
+                    .as_ref()
+                    .is_none_or(|t| title.contains(t.as_str()))
+                {
+                    exists = true;
+                }
+            }
+            // exists=false cannot be proven (the window may simply not be
+            // enumerated); mirror the contract and treat absence as failure.
+            let observed = if titles.is_empty() {
+                "no window for this pid".to_string()
+            } else {
+                format!("windows: {titles:?}")
+            };
+            Ok((exists, observed))
+        })
+        .await
+        .map_err(|e| LxhError::ProcessSpawnFailed(e.to_string()))?
+        .map_err(|e: LxhError| e)?;
+
+        let results = vec![window_outcome, element_outcome];
+        let status = if results.iter().all(|(ok, _)| *ok) {
+            "satisfied"
+        } else {
+            "unsatisfied"
+        };
+        Ok(VerificationResult {
+            status: status.to_string(),
+            results,
+        })
     }
 
     async fn element_frame(&self, pid: u32, index: usize) -> Result<Bounds, LxhError> {
@@ -456,6 +493,64 @@ fn read_process_name(pid: u32) -> Option<String> {
     std::fs::read_to_string(format!("/proc/{}/comm", pid))
         .ok()
         .map(|s| s.trim().to_string())
+}
+
+/// Managed windows in stacking order (bottom to top), maintained by the WM
+/// (`_NET_CLIENT_LIST_STACKING`). Returns (xid, pid, title). Tree-walking
+/// the root would also surface helper windows (e.g. GTK CSD shadows) that
+/// are not real app windows.
+fn managed_windows(
+    conn: &RustConnection,
+    root: u32,
+) -> Result<Vec<(u32, Option<u32>, String)>, LxhError> {
+    let client_list = conn
+        .intern_atom(false, b"_NET_CLIENT_LIST_STACKING")
+        .map_err(x11::xerr)?
+        .reply()
+        .map_err(x11::xerr)?
+        .atom;
+    let utf8 = conn
+        .intern_atom(false, b"UTF8_STRING")
+        .map_err(x11::xerr)?
+        .reply()
+        .map_err(x11::xerr)?
+        .atom;
+    let net_wm_name = conn
+        .intern_atom(false, b"_NET_WM_NAME")
+        .map_err(x11::xerr)?
+        .reply()
+        .map_err(x11::xerr)?
+        .atom;
+
+    let ids = conn
+        .get_property(false, root, client_list, AtomEnum::WINDOW, 0, 4096)
+        .map_err(x11::xerr)?
+        .reply()
+        .map_err(x11::xerr)?
+        .value
+        .as_chunks::<4>()
+        .0
+        .iter()
+        .map(|b| u32::from_ne_bytes(*b))
+        .collect::<Vec<u32>>();
+
+    let mut out = Vec::new();
+    for xid in ids {
+        let pid = pid_of_window(conn, xid).ok();
+        let title = conn
+            .get_property(false, xid, net_wm_name, utf8, 0, 1024)
+            .ok()
+            .and_then(|c| c.reply().ok())
+            .and_then(|r| {
+                if r.value.is_empty() {
+                    None
+                } else {
+                    String::from_utf8(r.value).ok()
+                }
+            });
+        out.push((xid, pid, title.unwrap_or_default()));
+    }
+    Ok(out)
 }
 
 fn list_processes() -> Vec<ProcessEntry> {

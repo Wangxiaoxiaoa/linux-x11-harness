@@ -178,6 +178,39 @@ pub trait ClipboardDriver: Send + Sync {
     async fn clipboard_set(&self, text: &str) -> Result<(), LxhError>;
 }
 
+/// One state assertion from `verify_state`.
+#[derive(Debug, Clone)]
+pub struct StateExpectation {
+    /// Window-level predicate for the process's window.
+    pub window: Option<WindowExpectation>,
+    /// Element-level predicate against the AT-SPI tree.
+    pub element: Option<ElementExpectation>,
+}
+
+#[derive(Debug, Clone, Default)]
+pub struct WindowExpectation {
+    /// The window must exist.
+    pub exists: bool,
+    /// The window title must contain this string.
+    pub title_contains: Option<String>,
+}
+
+#[derive(Debug, Clone, Default)]
+pub struct ElementExpectation {
+    /// The element's AT-SPI role must equal this string.
+    pub role: Option<String>,
+    /// Some element's name must contain this string.
+    pub label_contains: Option<String>,
+}
+
+#[derive(Debug, Clone)]
+pub struct VerificationResult {
+    /// "satisfied" when every predicate holds, "unsatisfied" otherwise.
+    pub status: String,
+    /// Per-predicate outcome with a short observed-state description.
+    pub results: Vec<(bool, String)>,
+}
+
 #[async_trait]
 pub trait A11yDriver: Send + Sync {
     async fn get_window_state(
@@ -190,6 +223,16 @@ pub trait A11yDriver: Send + Sync {
     async fn get_desktop_overview(&self) -> Result<DesktopOverview, LxhError>;
     async fn set_value(&self, pid: u32, index: usize, value: &str) -> Result<(), LxhError>;
     async fn element_frame(&self, pid: u32, index: usize) -> Result<Bounds, LxhError>;
+    /// Resolve an application menu path (e.g. ["File", "Open"]) through
+    /// AT-SPI and invoke the final item.
+    async fn invoke_menu(&self, pid: u32, path: &[String]) -> Result<(), LxhError>;
+    /// Assert read-only state predicates for a process's window and its
+    /// accessibility tree. Single sample; use lxh_wait between calls.
+    async fn verify_state(
+        &self,
+        pid: u32,
+        expect: &[StateExpectation],
+    ) -> Result<VerificationResult, LxhError>;
 }
 
 #[async_trait]
