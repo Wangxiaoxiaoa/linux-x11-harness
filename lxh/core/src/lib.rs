@@ -71,6 +71,11 @@ pub struct WindowEntry {
     pub pid: Option<u32>,
     pub title: Option<String>,
     pub bounds: Option<Bounds>,
+    /// Higher is closer to the front; `query_tree` returns bottom-to-top,
+    /// so the position in the root's child list is the z index.
+    pub z_index: usize,
+    /// Whether the window is currently viewable (mapped and on screen).
+    pub on_screen: bool,
 }
 
 pub struct DesktopOverview {

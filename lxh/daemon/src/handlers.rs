@@ -3,9 +3,9 @@ use std::sync::Arc;
 
 use crate::tools::{
     parse_args, tool_definitions as tools_tool_definitions, AppLaunchArgs, AppTerminateArgs,
-    ClickArgs, ClickElementArgs, ClipboardSetArgs, DisplayCreateArgs, DisplayIdArgs, DragArgs,
-    GetWindowStateArgs, KeyArgs, MoveArgs, ScrollArgs, SetValueArgs, SetWindowFrameArgs, TypeArgs,
-    WaitArgs, WindowIdArgs,
+    ClickArgs, ClickElementArgs, ClipboardSetArgs, DesktopOverviewArgs, DisplayCreateArgs,
+    DisplayIdArgs, DragArgs, GetWindowStateArgs, KeyArgs, MoveArgs, ScrollArgs, SetValueArgs,
+    SetWindowFrameArgs, TypeArgs, WaitArgs, WindowIdArgs,
 };
 use lxh_core::{Driver, LxhError, MouseButton};
 use lxh_driver::DefaultDriver;
@@ -387,8 +387,31 @@ pub async fn get_window_state(state: &DaemonState, args: &Value) -> Result<Value
     Ok(result)
 }
 
+pub fn list_apps() -> Value {
+    let apps: Vec<Value> = crate::apps::list_apps()
+        .iter()
+        .map(|a| {
+            let mut node = json!({
+                "name": a.name,
+                "running": a.running,
+            });
+            if let Some(pid) = a.pid {
+                node["pid"] = json!(pid);
+            }
+            if let Some(p) = &a.launch_path {
+                node["launch_path"] = json!(p);
+            }
+            if let Some(b) = &a.bundle_id {
+                node["bundle_id"] = json!(b);
+            }
+            node
+        })
+        .collect();
+    json!({ "apps": apps, "count": apps.len() })
+}
+
 pub async fn get_desktop_overview(state: &DaemonState, args: &Value) -> Result<Value, LxhError> {
-    let args: DisplayIdArgs = parse_args(args)?;
+    let args: DesktopOverviewArgs = parse_args(args)?;
     let driver = find_driver(state, &args.display_id).await?;
     let overview = driver.get_desktop_overview().await?;
 
@@ -400,11 +423,15 @@ pub async fn get_desktop_overview(state: &DaemonState, args: &Value) -> Result<V
     let windows: Vec<Value> = overview
         .windows
         .iter()
+        .filter(|w| args.pid.is_none_or(|pid| w.pid == Some(pid)))
+        .filter(|w| !args.on_screen_only.unwrap_or(false) || w.on_screen)
         .map(|w| {
             let mut node = json!({
                 "window_id": w.id,
                 "pid": w.pid,
                 "title": w.title,
+                "z_index": w.z_index,
+                "on_screen": w.on_screen,
             });
             if let Some(b) = &w.bounds {
                 node["bounds"] = json!({ "x": b.x, "y": b.y, "w": b.w, "h": b.h });

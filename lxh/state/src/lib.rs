@@ -187,8 +187,19 @@ impl A11yDriver for AtspiA11y {
                 .reply()
                 .map_err(x11::xerr)?;
 
+            // Exited applications can keep their windows alive in X11 as
+            // zombies; never return stale targets to callers.
+            let processes = list_processes();
+
             let mut windows = Vec::new();
-            for &window in &tree_reply.children {
+            for (z_index, &window) in tree_reply.children.iter().enumerate() {
+                let pid = pid_of_window(&conn, window).ok();
+                if let Some(pid) = pid {
+                    if !processes.iter().any(|p| p.pid == pid) {
+                        continue;
+                    }
+                }
+
                 let title = if let Ok(cookie) =
                     conn.get_property(false, window, net_wm_name, utf8, 0, 1024)
                 {
@@ -202,6 +213,12 @@ impl A11yDriver for AtspiA11y {
                 } else {
                     None
                 };
+
+                let on_screen = conn
+                    .get_window_attributes(window)
+                    .ok()
+                    .and_then(|c| c.reply().ok())
+                    .is_some_and(|a| a.map_state == x11rb::protocol::xproto::MapState::VIEWABLE);
 
                 let bounds = conn
                     .get_geometry(window)
@@ -217,13 +234,14 @@ impl A11yDriver for AtspiA11y {
 
                 windows.push(WindowEntry {
                     id: window,
-                    pid: pid_of_window(&conn, window).ok(),
+                    pid,
                     title,
                     bounds,
+                    z_index,
+                    on_screen,
                 });
             }
 
-            let processes = list_processes();
             Ok(DesktopOverview { processes, windows })
         })
         .await

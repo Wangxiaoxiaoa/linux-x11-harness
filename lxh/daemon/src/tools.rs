@@ -27,6 +27,20 @@ pub struct DisplayIdArgs {
 }
 
 #[derive(Debug, Deserialize, JsonSchema)]
+pub struct DesktopOverviewArgs {
+    pub display_id: String,
+    /// Only return windows of this process.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub pid: Option<u32>,
+    /// Only return windows that are mapped on screen. Default false.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub on_screen_only: Option<bool>,
+}
+
+#[derive(Debug, Deserialize, JsonSchema)]
+pub struct ListAppsArgs {}
+
+#[derive(Debug, Deserialize, JsonSchema)]
 pub struct AppLaunchArgs {
     pub display_id: String,
     pub command: String,
@@ -272,9 +286,19 @@ pub fn tool_definitions() -> Vec<Value> {
             root_schema::<WindowIdArgs>(),
         ),
         tool_def(
+            "lxh_list_apps",
+            "List applications: running processes merged with installed XDG desktop \
+             entries. Each entry includes name, running (with pid when live), launch_path \
+             (pass to lxh_app_launch) and bundle_id. Use it to answer \"is X installed?\" \
+             and \"is X running?\".",
+            root_schema::<ListAppsArgs>(),
+        ),
+        tool_def(
             "lxh_get_desktop_overview",
-            "Return desktop overview: running processes and visible windows",
-            root_schema::<DisplayIdArgs>(),
+            "Return desktop overview: running processes and windows. Stale windows from \
+             exited processes are never returned. Each window record includes window_id, pid, \
+             title, bounds, z_index (higher = closer to front) and on_screen.",
+            root_schema::<DesktopOverviewArgs>(),
         ),
         tool_def(
             "lxh_set_value",
@@ -346,10 +370,11 @@ mod tests {
     #[test]
     fn tool_definitions_has_expected_tools() {
         let defs = tool_definitions();
-        assert_eq!(defs.len(), 28, "expected 28 tool definitions");
+        assert_eq!(defs.len(), 29, "expected 29 tool definitions");
 
         let names: Vec<&str> = defs.iter().map(|d| d["name"].as_str().unwrap()).collect();
         assert!(names.contains(&"lxh_display_create"));
+        assert!(names.contains(&"lxh_list_apps"));
         assert!(names.contains(&"lxh_input_click"));
         assert!(names.contains(&"lxh_capture_screenshot"));
         assert!(names.contains(&"lxh_clipboard_get"));
@@ -417,7 +442,10 @@ mod schema_tests {
                 def["name"]
             );
             assert!(!raw.contains("format"), "{} has format: {raw}", def["name"]);
-            let props = schema["properties"].as_object().expect("properties object");
+            let Some(props) = schema["properties"].as_object() else {
+                // Parameter-less tools (e.g. lxh_list_apps) have no properties.
+                continue;
+            };
             for (name, prop) in props {
                 assert!(
                     prop.get("type").is_some(),
