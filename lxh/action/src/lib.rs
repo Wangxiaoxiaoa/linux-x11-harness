@@ -37,6 +37,21 @@ fn keycode_for_keysym(
     None
 }
 
+/// Round-trip to the X server so every buffered request (key/button
+/// transitions) is actually delivered before this short-lived connection
+/// closes. X11 requests are client-buffered: without the round trip the
+/// server may process a press and its release back to back, erasing any
+/// intended hold interval, and a closing connection loses requests that
+/// are still in flight.
+fn deliver(conn: &RustConnection) -> Result<(), LxhError> {
+    conn.flush().map_err(x11::xerr)?;
+    conn.get_input_focus()
+        .map_err(x11::xerr)?
+        .reply()
+        .map_err(x11::xerr)?;
+    Ok(())
+}
+
 fn get_mapping(
     conn: &RustConnection,
 ) -> Result<x11rb::protocol::xproto::GetKeyboardMappingReply, LxhError> {
@@ -135,7 +150,7 @@ impl InputDriver for XtestInput {
                     .map_err(x11::xerr)?;
             }
 
-            conn.flush().map_err(x11::xerr)?;
+            deliver(&conn)?;
             Ok(())
         })
         .await
@@ -151,7 +166,7 @@ impl InputDriver for XtestInput {
                 .map_err(x11::xerr)?
                 .check()
                 .map_err(x11::xerr)?;
-            conn.flush().map_err(x11::xerr)?;
+            deliver(&conn)?;
             Ok(())
         })
         .await
@@ -183,7 +198,7 @@ impl InputDriver for XtestInput {
                 click(if dx > 0 { 7 } else { 6 })?;
             }
 
-            conn.flush().map_err(x11::xerr)?;
+            deliver(&conn)?;
             Ok(())
         })
         .await
@@ -213,7 +228,7 @@ impl InputDriver for XtestInput {
                 .check()
                 .map_err(x11::xerr)?;
 
-            conn.flush().map_err(x11::xerr)?;
+            deliver(&conn)?;
             Ok(())
         })
         .await
@@ -249,7 +264,7 @@ impl InputDriver for XtestInput {
                 }
             }
 
-            conn.flush().map_err(x11::xerr)?;
+            deliver(&conn)?;
             Ok(())
         })
         .await
@@ -288,7 +303,7 @@ impl InputDriver for XtestInput {
                 press(&conn, code, false)?;
             }
 
-            conn.flush().map_err(x11::xerr)?;
+            deliver(&conn)?;
             Ok(())
         })
         .await
