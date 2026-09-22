@@ -53,6 +53,15 @@ impl DaemonServer {
             });
         }
     }
+
+    /// Stop every display (and its preview) — the SIGTERM path.
+    pub async fn shutdown(&self) {
+        let mut displays = self.state.displays.write().await;
+        for (id, display) in displays.drain() {
+            self.state.previews.close(&id);
+            let _ = display.lock().await.destroy().await;
+        }
+    }
 }
 
 async fn handle_client(

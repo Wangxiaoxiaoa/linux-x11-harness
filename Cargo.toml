@@ -9,7 +9,7 @@ license = "MIT OR Apache-2.0"
 repository = "https://github.com/Wangxiaoxiaoa/linux-x11-harness"
 
 [workspace.dependencies]
-tokio = { version = "1", features = ["rt-multi-thread", "macros", "process", "time", "io-std", "net", "io-util", "fs"] }
+tokio = { version = "1", features = ["rt-multi-thread", "macros", "process", "time", "io-std", "net", "io-util", "fs", "signal"] }
 thiserror = "1"
 async-trait = "0.1"
 serde = { version = "1", features = ["derive"] }

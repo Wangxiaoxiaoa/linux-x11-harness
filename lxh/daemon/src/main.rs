@@ -69,10 +69,32 @@ async fn run_serve(socket_path: PathBuf) {
     let _ = tokio::fs::write(pid_path(&socket_path), pid.to_string()).await;
 
     let runtime = Arc::new(Runtime::new());
-    let server = DaemonServer::new(runtime, socket_path);
-    if let Err(e) = server.run().await {
-        eprintln!("daemon error: {e}");
-        std::process::exit(1);
+    let server = DaemonServer::new(runtime, socket_path.clone());
+    let mut sigterm = match tokio::signal::unix::signal(tokio::signal::unix::SignalKind::terminate())
+    {
+        Ok(s) => s,
+        Err(e) => {
+            eprintln!("cannot install SIGTERM handler: {e}");
+            std::process::exit(1);
+        }
+    };
+
+    tokio::select! {
+        result = server.run() => {
+            if let Err(e) = result {
+                eprintln!("daemon error: {e}");
+                std::process::exit(1);
+            }
+        }
+        _ = sigterm.recv() => {
+            // Tear down every display (Xvfb, WM, apps, preview) before
+            // exiting; `kill_on_drop` never fires on signal death, so a
+            // plain exit would leak every Xvfb process.
+            eprintln!("SIGTERM received, stopping displays");
+            server.shutdown().await;
+            let _ = tokio::fs::remove_file(&socket_path).await;
+            let _ = tokio::fs::remove_file(pid_path(&socket_path)).await;
+        }
     }
 }
 
