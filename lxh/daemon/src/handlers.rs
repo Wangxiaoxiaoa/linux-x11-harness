@@ -5,7 +5,7 @@ use crate::tools::{
     parse_args, tool_definitions as tools_tool_definitions, AppLaunchArgs, AppTerminateArgs,
     ClickArgs, ClickElementArgs, ClipboardSetArgs, DesktopOverviewArgs, DisplayCreateArgs,
     DisplayIdArgs, DragArgs, GetWindowStateArgs, KeyArgs, MoveArgs, ScrollArgs, SetValueArgs,
-    SetWindowFrameArgs, TypeArgs, WaitArgs, WindowIdArgs,
+    SetWindowFrameArgs, TypeArgs, WaitArgs, WindowIdArgs, ZoomArgs,
 };
 use lxh_core::{Driver, LxhError, MouseButton};
 use lxh_driver::DefaultDriver;
@@ -19,6 +19,19 @@ pub struct DaemonState {
     pub displays: Arc<RwLock<HashMap<String, Arc<Mutex<Display>>>>>,
     pub drivers: Arc<RwLock<HashMap<String, Arc<dyn Driver>>>>,
     pub previews: Arc<PreviewPanel>,
+    /// Last zoom context per display, for `from_zoom` coordinate
+    /// translation in the coordinate-taking input tools.
+    pub zooms: Arc<std::sync::Mutex<HashMap<String, ZoomContext>>>,
+}
+
+/// Mapping from zoom-image coordinates back to display coordinates: the
+/// zoom output's top-left sits at (`display_x`, `display_y`) and one zoom
+/// pixel spans `scale` display pixels.
+#[derive(Clone, Copy)]
+pub struct ZoomContext {
+    pub display_x: i32,
+    pub display_y: i32,
+    pub scale: f64,
 }
 
 pub struct ClientSession {
@@ -182,11 +195,18 @@ pub async fn app_terminate(state: &DaemonState, args: &Value) -> Result<Value, L
 
 pub async fn click(state: &DaemonState, args: &Value) -> Result<Value, LxhError> {
     let args: ClickArgs = parse_args(args)?;
+    let (x, y) = resolve_coord(
+        state,
+        &args.display_id,
+        args.x,
+        args.y,
+        args.from_zoom.unwrap_or(false),
+    )?;
     let driver = find_driver(state, &args.display_id).await?;
     driver
         .click(
-            args.x as i32,
-            args.y as i32,
+            x as i32,
+            y as i32,
             parse_button(args.button)?,
             args.count.unwrap_or(1) as u32,
         )
@@ -196,8 +216,15 @@ pub async fn click(state: &DaemonState, args: &Value) -> Result<Value, LxhError>
 
 pub async fn move_mouse(state: &DaemonState, args: &Value) -> Result<Value, LxhError> {
     let args: MoveArgs = parse_args(args)?;
+    let (x, y) = resolve_coord(
+        state,
+        &args.display_id,
+        args.x,
+        args.y,
+        args.from_zoom.unwrap_or(false),
+    )?;
     let driver = find_driver(state, &args.display_id).await?;
-    driver.move_mouse(args.x as i32, args.y as i32).await?;
+    driver.move_mouse(x as i32, y as i32).await?;
     Ok(json!({ "success": true }))
 }
 
@@ -225,14 +252,12 @@ pub async fn scroll(state: &DaemonState, args: &Value) -> Result<Value, LxhError
 
 pub async fn drag(state: &DaemonState, args: &Value) -> Result<Value, LxhError> {
     let args: DragArgs = parse_args(args)?;
+    let from_zoom = args.from_zoom.unwrap_or(false);
+    let (x1, y1) = resolve_coord(state, &args.display_id, args.x1, args.y1, from_zoom)?;
+    let (x2, y2) = resolve_coord(state, &args.display_id, args.x2, args.y2, from_zoom)?;
     let driver = find_driver(state, &args.display_id).await?;
     driver
-        .drag(
-            args.x1 as i32,
-            args.y1 as i32,
-            args.x2 as i32,
-            args.y2 as i32,
-        )
+        .drag(x1 as i32, y1 as i32, x2 as i32, y2 as i32)
         .await?;
     Ok(json!({ "success": true }))
 }
@@ -256,6 +281,60 @@ pub async fn screenshot_window(state: &DaemonState, args: &Value) -> Result<Valu
     let driver = find_driver(state, &args.display_id).await?;
     let shot = driver.screenshot_window(args.window_id as u32).await?;
     Ok(json!({ "mimeType": "image/png", "data": encode_png(&shot.data) }))
+}
+
+pub async fn zoom(state: &DaemonState, args: &Value) -> Result<Value, LxhError> {
+    let args: ZoomArgs = parse_args(args)?;
+    let driver = find_driver(state, &args.display_id).await?;
+    let capture = driver
+        .capture_region(args.window_id as u32, args.x1, args.y1, args.x2, args.y2)
+        .await?;
+
+    let scale = capture.scale;
+    state.zooms.lock().unwrap().insert(
+        args.display_id.clone(),
+        ZoomContext {
+            display_x: capture.display_x,
+            display_y: capture.display_y,
+            scale,
+        },
+    );
+
+    Ok(json!({
+        "mimeType": "image/png",
+        "data": encode_png(&capture.screenshot.data),
+        "zoom": {
+            "display_origin": { "x": capture.display_x, "y": capture.display_y },
+            "scale": scale,
+        }
+    }))
+}
+
+/// Translate zoom-image coordinates to display coordinates.
+fn resolve_coord(
+    state: &DaemonState,
+    display_id: &str,
+    x: f64,
+    y: f64,
+    from_zoom: bool,
+) -> Result<(i64, i64), LxhError> {
+    if !from_zoom {
+        return Ok((x as i64, y as i64));
+    }
+    let ctx = state
+        .zooms
+        .lock()
+        .unwrap()
+        .get(display_id)
+        .copied()
+        .ok_or_else(|| {
+            LxhError::InvalidArgument(
+                "from_zoom requires a lxh_zoom call on this display first".into(),
+            )
+        })?;
+    let dx = ctx.display_x + (x / ctx.scale).round() as i32;
+    let dy = ctx.display_y + (y / ctx.scale).round() as i32;
+    Ok((dx as i64, dy as i64))
 }
 
 pub async fn window_focus(state: &DaemonState, args: &Value) -> Result<Value, LxhError> {

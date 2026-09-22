@@ -26,6 +26,7 @@ impl DaemonServer {
                 displays: Arc::new(RwLock::new(HashMap::new())),
                 drivers: Arc::new(RwLock::new(HashMap::new())),
                 previews: Arc::new(PreviewPanel::new()),
+                zooms: Arc::new(std::sync::Mutex::new(HashMap::new())),
             }),
             socket_path,
         }
@@ -177,6 +178,7 @@ async fn dispatch_tool_call(
         "lxh_input_scroll" => handlers::scroll(state, args).await,
         "lxh_input_drag" => handlers::drag(state, args).await,
         "lxh_input_get_cursor_position" => handlers::get_cursor_position(state, args).await,
+        "lxh_zoom" => handlers::zoom(state, args).await,
         "lxh_capture_screenshot" => handlers::screenshot(state, args).await,
         "lxh_capture_window" => handlers::screenshot_window(state, args).await,
         "lxh_window_focus" => handlers::window_focus(state, args).await,

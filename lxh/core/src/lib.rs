@@ -61,6 +61,16 @@ pub struct Screenshot {
     pub data: Vec<u8>,
 }
 
+/// A cropped, scaled window capture with the mapping back to display
+/// coordinates: the output's top-left sits at (`display_x`, `display_y`)
+/// on the display, and one output pixel spans `scale` window pixels.
+pub struct RegionCapture {
+    pub screenshot: Screenshot,
+    pub display_x: i32,
+    pub display_y: i32,
+    pub scale: f64,
+}
+
 pub struct ProcessEntry {
     pub pid: u32,
     pub name: String,
@@ -136,6 +146,16 @@ pub trait InputDriver: Send + Sync {
 pub trait CaptureDriver: Send + Sync {
     async fn screenshot(&self) -> Result<Screenshot, LxhError>;
     async fn screenshot_window(&self, window_id: u32) -> Result<Screenshot, LxhError>;
+    /// Capture a window region (window coordinates, padded by 20% and
+    /// clamped to the window), scaled so the output is at most 500 px wide.
+    async fn capture_region(
+        &self,
+        window_id: u32,
+        x1: f64,
+        y1: f64,
+        x2: f64,
+        y2: f64,
+    ) -> Result<RegionCapture, LxhError>;
 }
 
 #[async_trait]

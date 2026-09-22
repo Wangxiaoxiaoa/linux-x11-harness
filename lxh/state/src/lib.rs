@@ -2,11 +2,11 @@ use async_trait::async_trait;
 use image::{ImageEncoder, RgbImage};
 use lxh_core::{
     x11, A11yDriver, Bounds, CaptureDriver, DesktopOverview, GetWindowStateResult, LxhError,
-    ProcessEntry, Screenshot, WindowEntry,
+    ProcessEntry, RegionCapture, Screenshot, WindowEntry,
 };
 use tokio::task;
 use x11rb::connection::Connection;
-use x11rb::protocol::xproto::ConnectionExt as _;
+use x11rb::protocol::xproto::{AtomEnum, ConnectionExt as _};
 use x11rb::rust_connection::RustConnection;
 
 pub mod atspi;
@@ -49,6 +49,104 @@ impl CaptureDriver for X11Capture {
                 .reply()
                 .map_err(x11::xerr)?;
             capture_rect(&conn, window_id, 0, 0, geom.width, geom.height)
+        })
+        .await
+        .map_err(|e| LxhError::ProcessSpawnFailed(e.to_string()))?
+    }
+
+    async fn capture_region(
+        &self,
+        window_id: u32,
+        x1: f64,
+        y1: f64,
+        x2: f64,
+        y2: f64,
+    ) -> Result<RegionCapture, LxhError> {
+        let display = self.display.clone();
+        task::spawn_blocking(move || {
+            let (conn, screen) = x11::open_connection(&display)?;
+            let root = conn.setup().roots[screen].root;
+
+            let geom = conn
+                .get_geometry(window_id)
+                .map_err(x11::xerr)?
+                .reply()
+                .map_err(x11::xerr)?;
+            let (win_w, win_h) = (f64::from(geom.width), f64::from(geom.height));
+
+            // Window's absolute position (it is a child of the WM frame).
+            let win_origin = conn
+                .translate_coordinates(window_id, root, 0, 0)
+                .map_err(x11::xerr)?
+                .reply()
+                .map_err(x11::xerr)?;
+            let (win_x, win_y) = (f64::from(win_origin.dst_x), f64::from(win_origin.dst_y));
+
+            // Region is in display coordinates (the same space as a11y
+            // frames and input coordinates); normalize, pad by 20%, then
+            // clamp to the window.
+            let (x1, x2) = (x1.min(x2), x1.max(x2));
+            let (y1, y2) = (y1.min(y2), y1.max(y2));
+            let pad_x = (x2 - x1) * 0.2;
+            let pad_y = (y2 - y1) * 0.2;
+            let mut lx1 = (x1 - win_x - pad_x).clamp(0.0, win_w);
+            let mut ly1 = (y1 - win_y - pad_y).clamp(0.0, win_h);
+            let lx2 = (x2 - win_x + pad_x).clamp(0.0, win_w);
+            let ly2 = (y2 - win_y + pad_y).clamp(0.0, win_h);
+            // Keep the crop inside the drawable even for degenerate regions.
+            lx1 = lx1.min((win_w - 1.0).max(0.0));
+            ly1 = ly1.min((win_h - 1.0).max(0.0));
+            let crop_w = (lx2 - lx1).max(1.0).min(win_w - lx1);
+            let crop_h = (ly2 - ly1).max(1.0).min(win_h - ly1);
+
+            // Display-absolute origin of the crop.
+            let display_x = win_x + lx1;
+            let display_y = win_y + ly1;
+
+            // Scale down so the output is at most 500 px wide; never upscale.
+            let scale = (500.0 / crop_w).min(1.0);
+            let out_w = (crop_w * scale).round().max(1.0) as u32;
+            let out_h = (crop_h * scale).round().max(1.0) as u32;
+
+            let mut shot = capture_rect(
+                &conn,
+                window_id,
+                lx1 as i16,
+                ly1 as i16,
+                crop_w as u16,
+                crop_h as u16,
+            )?;
+
+            if scale < 1.0 {
+                let decoder = image::codecs::png::PngDecoder::new(std::io::Cursor::new(&shot.data))
+                    .map_err(|e| LxhError::InvalidArgument(e.to_string()))?;
+                use image::ImageDecoder;
+                let (out_cols, out_rows) = decoder.dimensions();
+                let mut buf = vec![0u8; decoder.total_bytes() as usize];
+                decoder
+                    .read_image(&mut buf)
+                    .map_err(|e| LxhError::InvalidArgument(e.to_string()))?;
+                let img = image::RgbImage::from_raw(out_cols, out_rows, buf)
+                    .ok_or_else(|| LxhError::InvalidArgument("failed to decode capture".into()))?;
+                let resized = image::imageops::resize(
+                    &img,
+                    out_w,
+                    out_h,
+                    image::imageops::FilterType::Triangle,
+                );
+                let mut png = Vec::new();
+                image::codecs::png::PngEncoder::new(&mut png)
+                    .write_image(&resized, out_w, out_h, image::ExtendedColorType::Rgb8)
+                    .map_err(|e| LxhError::InvalidArgument(e.to_string()))?;
+                shot = Screenshot { data: png };
+            }
+
+            Ok(RegionCapture {
+                screenshot: shot,
+                display_x: display_x as i32,
+                display_y: display_y as i32,
+                scale: out_w as f64 / crop_w,
+            })
         })
         .await
         .map_err(|e| LxhError::ProcessSpawnFailed(e.to_string()))?
@@ -181,18 +279,36 @@ impl A11yDriver for AtspiA11y {
                 .map_err(x11::xerr)?
                 .atom;
 
-            let tree_reply = conn
-                .query_tree(root)
+            // Managed windows in stacking order (bottom to top), maintained
+            // by the WM. Tree-walking the root would also surface helper
+            // windows (e.g. GTK CSD shadows) that are not real app windows.
+            let client_list = conn
+                .intern_atom(false, b"_NET_CLIENT_LIST_STACKING")
                 .map_err(x11::xerr)?
                 .reply()
-                .map_err(x11::xerr)?;
+                .map_err(x11::xerr)?
+                .atom;
+            let client_windows = conn
+                .get_property(false, root, client_list, AtomEnum::WINDOW, 0, 4096)
+                .map_err(x11::xerr)?
+                .reply()
+                .ok()
+                .map(|r| {
+                    r.value
+                        .as_chunks::<4>()
+                        .0
+                        .iter()
+                        .map(|b| u32::from_ne_bytes(*b))
+                        .collect::<Vec<u32>>()
+                })
+                .unwrap_or_default();
 
             // Exited applications can keep their windows alive in X11 as
             // zombies; never return stale targets to callers.
             let processes = list_processes();
 
             let mut windows = Vec::new();
-            for (z_index, &window) in tree_reply.children.iter().enumerate() {
+            for (z_index, &window) in client_windows.iter().enumerate() {
                 let pid = pid_of_window(&conn, window).ok();
                 if let Some(pid) = pid {
                     if !processes.iter().any(|p| p.pid == pid) {
@@ -220,23 +336,30 @@ impl A11yDriver for AtspiA11y {
                     .and_then(|c| c.reply().ok())
                     .is_some_and(|a| a.map_state == x11rb::protocol::xproto::MapState::VIEWABLE);
 
-                let bounds = conn
+                // Display-absolute geometry (client geometry is relative to
+                // the WM frame).
+                let translated = conn
+                    .translate_coordinates(window, root, 0, 0)
+                    .map_err(x11::xerr)?
+                    .reply()
+                    .map_err(x11::xerr)?;
+                let geom = conn
                     .get_geometry(window)
                     .map_err(x11::xerr)?
                     .reply()
-                    .ok()
-                    .map(|g| Bounds {
-                        x: g.x as i32,
-                        y: g.y as i32,
-                        w: g.width as u32,
-                        h: g.height as u32,
-                    });
+                    .map_err(x11::xerr)?;
+                let bounds = Bounds {
+                    x: translated.dst_x as i32,
+                    y: translated.dst_y as i32,
+                    w: geom.width as u32,
+                    h: geom.height as u32,
+                };
 
                 windows.push(WindowEntry {
                     id: window,
                     pid,
                     title,
-                    bounds,
+                    bounds: Some(bounds),
                     z_index,
                     on_screen,
                 });

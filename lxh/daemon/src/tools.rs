@@ -41,6 +41,17 @@ pub struct DesktopOverviewArgs {
 pub struct ListAppsArgs {}
 
 #[derive(Debug, Deserialize, JsonSchema)]
+pub struct ZoomArgs {
+    pub display_id: String,
+    pub window_id: u64,
+    /// Region in window coordinates (screenshot pixels).
+    pub x1: f64,
+    pub y1: f64,
+    pub x2: f64,
+    pub y2: f64,
+}
+
+#[derive(Debug, Deserialize, JsonSchema)]
 pub struct AppLaunchArgs {
     pub display_id: String,
     pub command: String,
@@ -68,19 +79,25 @@ pub struct GetWindowStateArgs {
 #[derive(Debug, Deserialize, JsonSchema)]
 pub struct ClickArgs {
     pub display_id: String,
-    pub x: i64,
-    pub y: i64,
+    pub x: f64,
+    pub y: f64,
     #[serde(default)]
     pub button: Option<ButtonArg>,
     #[serde(default)]
     pub count: Option<u64>,
+    /// Interpret x/y as coordinates in the last lxh_zoom image instead of
+    /// display coordinates. Requires a lxh_zoom call on this display first.
+    #[serde(default)]
+    pub from_zoom: Option<bool>,
 }
 
 #[derive(Debug, Deserialize, JsonSchema)]
 pub struct MoveArgs {
     pub display_id: String,
-    pub x: i64,
-    pub y: i64,
+    pub x: f64,
+    pub y: f64,
+    #[serde(default)]
+    pub from_zoom: Option<bool>,
 }
 
 #[derive(Debug, Deserialize, JsonSchema)]
@@ -109,10 +126,12 @@ pub struct ScrollArgs {
 #[derive(Debug, Deserialize, JsonSchema)]
 pub struct DragArgs {
     pub display_id: String,
-    pub x1: i64,
-    pub y1: i64,
-    pub x2: i64,
-    pub y2: i64,
+    pub x1: f64,
+    pub y1: f64,
+    pub x2: f64,
+    pub y2: f64,
+    #[serde(default)]
+    pub from_zoom: Option<bool>,
 }
 
 #[derive(Debug, Deserialize, JsonSchema)]
@@ -281,6 +300,15 @@ pub fn tool_definitions() -> Vec<Value> {
             root_schema::<DisplayIdArgs>(),
         ),
         tool_def(
+            "lxh_zoom",
+            "Capture a cropped image of a region (x1,y1)-(x2,y2) in display coordinates (the \
+             same space as a11y frames and input coordinates), padded by 20% and scaled to \
+             at most 500 px wide. The result includes display_origin and scale; pass \
+             from_zoom=true to lxh_input_click / lxh_input_move / lxh_input_drag to \
+             translate coordinates from the zoom image back to display space.",
+            root_schema::<ZoomArgs>(),
+        ),
+        tool_def(
             "lxh_capture_window",
             "Take a screenshot of a specific window",
             root_schema::<WindowIdArgs>(),
@@ -370,11 +398,12 @@ mod tests {
     #[test]
     fn tool_definitions_has_expected_tools() {
         let defs = tool_definitions();
-        assert_eq!(defs.len(), 29, "expected 29 tool definitions");
+        assert_eq!(defs.len(), 30, "expected 30 tool definitions");
 
         let names: Vec<&str> = defs.iter().map(|d| d["name"].as_str().unwrap()).collect();
         assert!(names.contains(&"lxh_display_create"));
         assert!(names.contains(&"lxh_list_apps"));
+        assert!(names.contains(&"lxh_zoom"));
         assert!(names.contains(&"lxh_input_click"));
         assert!(names.contains(&"lxh_capture_screenshot"));
         assert!(names.contains(&"lxh_clipboard_get"));
@@ -412,8 +441,8 @@ mod tests {
     fn parse_click_args_with_button() {
         let args = json!({"display_id": "d-1", "x": 10, "y": 20, "button": "right", "count": 2});
         let parsed = parse_args::<ClickArgs>(&args).unwrap();
-        assert_eq!(parsed.x, 10);
-        assert_eq!(parsed.y, 20);
+        assert_eq!(parsed.x, 10.0);
+        assert_eq!(parsed.y, 20.0);
         assert!(matches!(parsed.button, Some(ButtonArg::Right)));
         assert_eq!(parsed.count, Some(2));
     }

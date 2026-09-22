@@ -2,7 +2,8 @@ use async_trait::async_trait;
 use lxh_action::{ArboardClipboard, X11WindowManager, XtestInput};
 use lxh_core::{
     A11yDriver, Bounds, CaptureDriver, ClipboardDriver, DesktopOverview, Driver,
-    GetWindowStateResult, InputDriver, LxhError, MouseButton, Screenshot, WindowDriver,
+    GetWindowStateResult, InputDriver, LxhError, MouseButton, RegionCapture, Screenshot,
+    WindowDriver,
 };
 use lxh_state::{AtspiA11y, X11Capture};
 
@@ -65,6 +66,17 @@ impl CaptureDriver for DefaultDriver {
 
     async fn screenshot_window(&self, window_id: u32) -> Result<Screenshot, LxhError> {
         self.capture.screenshot_window(window_id).await
+    }
+
+    async fn capture_region(
+        &self,
+        window_id: u32,
+        x1: f64,
+        y1: f64,
+        x2: f64,
+        y2: f64,
+    ) -> Result<RegionCapture, LxhError> {
+        self.capture.capture_region(window_id, x1, y1, x2, y2).await
     }
 }
 
