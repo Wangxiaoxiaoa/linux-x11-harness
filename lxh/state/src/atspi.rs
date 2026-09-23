@@ -254,17 +254,282 @@ pub async fn set_value(pid: u32, index: usize, value: &str) -> Result<(), LxhErr
         .ok_or(LxhError::NotSupported)?;
 
     let proxies = node.proxies().await.map_err(|_| LxhError::NotSupported)?;
-    let editable = proxies
-        .editable_text()
+
+    // Focus-free on purpose: calling Component.GrabFocus here would raise
+    // the whole toplevel on some toolkits. Toolkits that expose
+    // EditableText accept the write; ones that gate it on focus must fail
+    // honestly instead of changing desktop focus implicitly.
+    if let Ok(editable) = proxies.editable_text().await {
+        if editable.set_text_contents(value).await.unwrap_or(false) {
+            return Ok(());
+        }
+        // Some toolkits reject SetTextContents but accept clear-then-insert
+        // through the editable text's insert/delete pair.
+        if let Ok(text) = proxies.text().await {
+            if let Ok(count) = text.character_count().await {
+                if editable.delete_text(0, count).await.unwrap_or(false)
+                    && editable
+                        .insert_text(0, value, value.chars().count() as i32)
+                        .await
+                        .unwrap_or(false)
+                {
+                    return Ok(());
+                }
+            }
+        }
+    }
+
+    Err(LxhError::NotSupported)
+}
+
+/// Check whether the element holding keyboard focus (within this pid's
+/// tree) exposes EditableText.
+/// Recursively locate the focused node and report whether it exposes
+/// EditableText. Tree descent stays within `pid`.
+async fn focused_node_is_editable(
+    conn: &AccessibilityConnection,
+    dbus: &atspi::zbus::fdo::DBusProxy<'_>,
+    pid: u32,
+    node: &AccessibleProxy<'_>,
+) -> Result<bool, LxhError> {
+    if let Ok(states) = node.get_state().await {
+        if states.contains(atspi::State::Focused) {
+            let proxies = node.proxies().await.map_err(|_| LxhError::NotSupported)?;
+            return Ok(proxies.editable_text().await.is_ok());
+        }
+    }
+    if let Ok(children) = node.get_children().await {
+        for child_ref in children {
+            let Ok(child) = conn.object_as_accessible(&child_ref).await else {
+                continue;
+            };
+            if pid_of(dbus, &child_ref).await != Some(pid) {
+                continue;
+            }
+            if Box::pin(focused_node_is_editable(conn, dbus, pid, &child)).await? {
+                return Ok(true);
+            }
+        }
+    }
+    Ok(false)
+}
+
+pub async fn focused_is_editable(pid: u32) -> Result<bool, LxhError> {
+    let conn = AccessibilityConnection::new()
+        .await
+        .map_err(|e| LxhError::ProcessSpawnFailed(e.to_string()))?;
+    let root = conn
+        .root_accessible_on_registry()
+        .await
+        .map_err(|e| LxhError::ProcessSpawnFailed(e.to_string()))?;
+    let dbus = atspi::zbus::fdo::DBusProxy::new(conn.connection())
+        .await
+        .map_err(|e| LxhError::ProcessSpawnFailed(e.to_string()))?;
+
+    let children = root
+        .get_children()
+        .await
+        .map_err(|e| LxhError::ProcessSpawnFailed(e.to_string()))?;
+    for child_ref in children {
+        if pid_of(&dbus, &child_ref).await != Some(pid) {
+            continue;
+        }
+        let app = conn
+            .object_as_accessible(&child_ref)
+            .await
+            .map_err(|e| LxhError::ProcessSpawnFailed(e.to_string()))?;
+        if focused_node_is_editable(&conn, &dbus, pid, &app).await? {
+            return Ok(true);
+        }
+    }
+    Ok(false)
+}
+
+/// Write `text` into the first editable element in the pid's tree
+/// (focus-free: GrabFocus gives the widget internal keyboard focus
+/// without raising the window).
+pub async fn type_into_editable(pid: u32, text: &str) -> Result<(), LxhError> {
+    let conn = AccessibilityConnection::new()
+        .await
+        .map_err(|e| LxhError::ProcessSpawnFailed(e.to_string()))?;
+    let root = conn
+        .root_accessible_on_registry()
+        .await
+        .map_err(|e| LxhError::ProcessSpawnFailed(e.to_string()))?;
+    let dbus = atspi::zbus::fdo::DBusProxy::new(conn.connection())
+        .await
+        .map_err(|e| LxhError::ProcessSpawnFailed(e.to_string()))?;
+
+    let children = root
+        .get_children()
+        .await
+        .map_err(|e| LxhError::ProcessSpawnFailed(e.to_string()))?;
+    let mut app = None;
+    for child_ref in children {
+        if pid_of(&dbus, &child_ref).await == Some(pid) {
+            app = Some(
+                conn.object_as_accessible(&child_ref)
+                    .await
+                    .map_err(|e| LxhError::ProcessSpawnFailed(e.to_string()))?,
+            );
+            break;
+        }
+    }
+    let app = app.ok_or_else(|| LxhError::DisplayNotFound(format!("pid {}", pid)))?;
+
+    let elements = walk_tree(pid).await?;
+    let editable_idx = elements
+        .iter()
+        .find(|e| {
+            matches!(
+                e.role.as_str(),
+                "text" | "entry" | "password text" | "spin button"
+            )
+        })
+        .map(|e| e.index)
+        .ok_or_else(|| {
+            LxhError::InvalidArgument(format!("pid {pid} exposes no editable element"))
+        })?;
+
+    let node = walk_to_index(&conn, &app, editable_idx)
+        .await?
+        .ok_or(LxhError::NotSupported)?;
+    let proxies = node.proxies().await.map_err(|_| LxhError::NotSupported)?;
+
+    // GrabFocus gives the widget internal keyboard focus without raising
+    // the toplevel; toolkits that expose EditableText only while focused
+    // (Qt6, GTK4 with GTK_A11Y=atspi) then accept the write.
+    if let Ok(component) = proxies.component().await {
+        let _ = component.grab_focus().await;
+    }
+    if let Ok(editable) = proxies.editable_text().await {
+        if editable.set_text_contents(text).await.unwrap_or(false) {
+            return Ok(());
+        }
+        if let Ok(t) = proxies.text().await {
+            if let Ok(count) = t.character_count().await {
+                if editable.delete_text(0, count).await.unwrap_or(false)
+                    && editable
+                        .insert_text(0, text, text.chars().count() as i32)
+                        .await
+                        .unwrap_or(false)
+                {
+                    return Ok(());
+                }
+            }
+        }
+    }
+
+    Err(LxhError::NotSupported)
+}
+
+/// Perform the primary activation action of element `index` through
+/// AT-SPI (focus-free, no coordinate math). Returns the action name that
+/// was actuated.
+///
+/// The action is chosen by NAME, not by position: a GTK4 text view
+/// advertises `buffer.delete-line` first, so firing "action 0" there
+/// deletes a line of the user's document while reporting an ordinary
+/// click. Elements with no activation verb (passive roles: labels,
+/// statics, images) are rejected as suspected no-ops - the caller should
+/// fall back to a coordinate click instead of trusting a fake success.
+pub async fn perform_action(pid: u32, index: usize) -> Result<String, LxhError> {
+    let elements = walk_tree(pid).await?;
+    let target = elements.get(index).ok_or_else(|| {
+        LxhError::InvalidArgument(format!(
+            "element {index} not found (total: {})",
+            elements.len()
+        ))
+    })?;
+
+    const ACTIVATION_VERBS: [&str; 8] = [
+        "press", "click", "activate", "open", "toggle", "expand", "choose", "confirm",
+    ];
+    const PASSIVE_ROLES: [&str; 6] = [
+        "label",
+        "static",
+        "image",
+        "heading",
+        "separator",
+        "scroll bar",
+    ];
+
+    let role_lower = target.role.to_ascii_lowercase();
+    if target.actions.is_empty() || PASSIVE_ROLES.iter().any(|r| role_lower.contains(r)) {
+        return Err(LxhError::InvalidArgument(format!(
+            "suspected_noop: element {index} ({}) advertises no activation action; \
+             use a coordinate click instead",
+            target.role
+        )));
+    }
+
+    let chosen = target
+        .actions
+        .iter()
+        .find(|a| {
+            let verb = a.to_ascii_lowercase();
+            ACTIVATION_VERBS.iter().any(|v| verb.contains(v))
+        })
+        .unwrap_or(&target.actions[0]);
+
+    let conn = AccessibilityConnection::new()
+        .await
+        .map_err(|e| LxhError::ProcessSpawnFailed(e.to_string()))?;
+    let root = conn
+        .root_accessible_on_registry()
+        .await
+        .map_err(|e| LxhError::ProcessSpawnFailed(e.to_string()))?;
+    let dbus = atspi::zbus::fdo::DBusProxy::new(conn.connection())
+        .await
+        .map_err(|e| LxhError::ProcessSpawnFailed(e.to_string()))?;
+    let children = root
+        .get_children()
+        .await
+        .map_err(|e| LxhError::ProcessSpawnFailed(e.to_string()))?;
+    let mut app = None;
+    for child_ref in children {
+        if pid_of(&dbus, &child_ref).await == Some(pid) {
+            app = Some(
+                conn.object_as_accessible(&child_ref)
+                    .await
+                    .map_err(|e| LxhError::ProcessSpawnFailed(e.to_string()))?,
+            );
+            break;
+        }
+    }
+    let app = app.ok_or_else(|| LxhError::DisplayNotFound(format!("pid {}", pid)))?;
+
+    let node = walk_to_index(&conn, &app, index)
+        .await?
+        .ok_or(LxhError::NotSupported)?;
+    let proxies = node.proxies().await.map_err(|_| LxhError::NotSupported)?;
+    let action = proxies.action().await.map_err(|_| LxhError::NotSupported)?;
+
+    let n = action
+        .n_actions()
+        .await
+        .map_err(|_| LxhError::NotSupported)?;
+    let mut index_of = None;
+    for i in 0..n {
+        if let Ok(name) = action.get_name(i).await {
+            if name == *chosen {
+                index_of = Some(i);
+                break;
+            }
+        }
+    }
+    let index_of = index_of.ok_or(LxhError::NotSupported)?;
+    action
+        .do_action(index_of)
         .await
         .map_err(|_| LxhError::NotSupported)?;
 
-    editable
-        .set_text_contents(value)
-        .await
-        .map_err(|_| LxhError::NotSupported)?;
+    // doAction acknowledgement can precede the toolkit's queued mutation;
+    // give one short event-loop turn so a caller's immediate state read
+    // observes the action that was delivered.
+    tokio::time::sleep(std::time::Duration::from_millis(50)).await;
 
-    Ok(())
+    Ok(chosen.clone())
 }
 
 /// Resolve an application menu path (e.g. ["File", "Open"]) through

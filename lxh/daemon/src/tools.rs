@@ -153,6 +153,10 @@ pub struct MoveArgs {
 pub struct TypeArgs {
     pub display_id: String,
     pub text: String,
+    /// Target process. Enables the AT-SPI write fallback when the focused
+    /// widget is not editable.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub pid: Option<u32>,
 }
 
 #[derive(Debug, Deserialize, JsonSchema)]

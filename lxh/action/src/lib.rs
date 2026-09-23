@@ -235,7 +235,7 @@ impl InputDriver for XtestInput {
         .map_err(|e| LxhError::ProcessSpawnFailed(e.to_string()))?
     }
 
-    async fn type_text(&self, text: &str) -> Result<(), LxhError> {
+    async fn type_text(&self, _pid: Option<u32>, text: &str) -> Result<(), LxhError> {
         let display = self.display.clone();
         let text = text.to_string();
         task::spawn_blocking(move || {

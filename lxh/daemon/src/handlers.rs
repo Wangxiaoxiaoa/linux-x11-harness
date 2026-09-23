@@ -233,7 +233,7 @@ pub async fn move_mouse(state: &DaemonState, args: &Value) -> Result<Value, LxhE
 pub async fn input_type(state: &DaemonState, args: &Value) -> Result<Value, LxhError> {
     let args: TypeArgs = parse_args(args)?;
     let driver = find_driver(state, &args.display_id).await?;
-    driver.type_text(&args.text).await?;
+    driver.type_text(args.pid, &args.text).await?;
     Ok(json!({ "success": true }))
 }
 

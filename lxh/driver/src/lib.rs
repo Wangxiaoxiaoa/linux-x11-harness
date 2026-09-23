@@ -45,8 +45,20 @@ impl InputDriver for DefaultDriver {
         self.input.drag(x1, y1, x2, y2).await
     }
 
-    async fn type_text(&self, text: &str) -> Result<(), LxhError> {
-        self.input.type_text(text).await
+    async fn type_text(&self, pid: Option<u32>, text: &str) -> Result<(), LxhError> {
+        self.input.type_text(pid, text).await?;
+        // XTEST delivers to the focused widget. When nothing editable holds
+        // focus (the agent skipped clicking a field), fall back to writing
+        // through the AT-SPI tree instead of letting the text vanish.
+        if let Some(pid) = pid {
+            let focused_editable = lxh_state::atspi::focused_is_editable(pid)
+                .await
+                .unwrap_or(true);
+            if !focused_editable {
+                lxh_state::atspi::type_into_editable(pid, text).await?;
+            }
+        }
+        Ok(())
     }
 
     async fn key(&self, key: &str, modifiers: &[&str]) -> Result<(), LxhError> {
@@ -162,6 +174,14 @@ impl Driver for DefaultDriver {
         index: usize,
         button: MouseButton,
     ) -> Result<(), LxhError> {
+        // Primary activation goes through AT-SPI doAction: focus-free, no
+        // coordinate math, and immune to the GTK4 nested-label trap (the
+        // label inside a button swallows coordinate clicks). Other buttons
+        // and multi-clicks stay on the coordinate path.
+        if button == MouseButton::Left {
+            lxh_state::atspi::perform_action(pid, index).await?;
+            return Ok(());
+        }
         let Bounds { x, y, w, h } = self.a11y.element_frame(pid, index).await?;
         let cx = x + w as i32 / 2;
         let cy = y + h as i32 / 2;
