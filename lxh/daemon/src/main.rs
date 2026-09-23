@@ -68,6 +68,13 @@ async fn run_serve(socket_path: PathBuf) {
     let pid = std::process::id();
     let _ = tokio::fs::write(pid_path(&socket_path), pid.to_string()).await;
 
+    // Chromium/Electron only render AT-SPI trees when the session advertises
+    // accessibility; do it once so apps launched on harness displays are
+    // automatable from birth.
+    if let Err(e) = lxh_state::a11y::advertise_once() {
+        eprintln!("a11y advertisement unavailable: {e}");
+    }
+
     let runtime = Arc::new(Runtime::new());
     let server = DaemonServer::new(runtime, socket_path.clone());
     let mut sigterm = match tokio::signal::unix::signal(tokio::signal::unix::SignalKind::terminate())

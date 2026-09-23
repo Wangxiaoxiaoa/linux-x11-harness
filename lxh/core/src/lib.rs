@@ -113,6 +113,14 @@ pub struct A11yElement {
     pub index: usize,
     pub role: String,
     pub name: Option<String>,
+    /// Text-interface content for entries and text views.
+    pub value: Option<String>,
+    /// Toggle state when the role exposes one.
+    pub checked: Option<bool>,
+    pub enabled: Option<bool>,
+    /// Selection state for selectable controls.
+    pub selected: Option<bool>,
+    pub description: Option<String>,
     pub frame: Option<Bounds>,
     pub actions: Vec<String>,
     pub parent_index: Option<usize>,

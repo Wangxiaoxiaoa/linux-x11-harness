@@ -9,6 +9,7 @@ use x11rb::connection::Connection;
 use x11rb::protocol::xproto::{AtomEnum, ConnectionExt as _};
 use x11rb::rust_connection::RustConnection;
 
+pub mod a11y;
 pub mod atspi;
 
 pub struct X11Capture {
@@ -615,6 +616,11 @@ mod tests {
                 index: 0,
                 role: "frame".into(),
                 name: Some("window".into()),
+                value: None,
+                checked: None,
+                enabled: Some(true),
+                selected: None,
+                description: None,
                 frame: Some(Bounds {
                     x: 0,
                     y: 0,
@@ -629,6 +635,11 @@ mod tests {
                 index: 1,
                 role: "button".into(),
                 name: Some("ok".into()),
+                value: None,
+                checked: None,
+                enabled: Some(true),
+                selected: None,
+                description: None,
                 frame: None,
                 actions: vec![],
                 parent_index: Some(0),

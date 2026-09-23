@@ -18,6 +18,7 @@ x11rb = { workspace = true }
 [dependencies]
 lxh-core = { workspace = true }
 lxh-driver = { workspace = true }
+lxh-state = { workspace = true }
 lxh-runtime = { workspace = true }
 lxh-preview = { workspace = true }
 tokio = { workspace = true }

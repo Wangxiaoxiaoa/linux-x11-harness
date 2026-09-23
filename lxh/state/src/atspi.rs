@@ -10,6 +10,16 @@ pub struct Element {
     pub index: usize,
     pub role: String,
     pub name: Option<String>,
+    /// Text-interface content for entries and text views (their accessible
+    /// name is often empty; the typed string lives here).
+    pub value: Option<String>,
+    /// Toggle state when the role exposes one (check boxes, check menu items).
+    pub checked: Option<bool>,
+    /// False when the StateSet lacks Enabled or the node is insensitive.
+    pub enabled: Option<bool>,
+    /// Selection state for selectable controls (radio, list items, tabs).
+    pub selected: Option<bool>,
+    pub description: Option<String>,
     pub frame: Option<Bounds>,
     pub actions: Vec<String>,
     pub parent_index: Option<usize>,
@@ -84,9 +94,30 @@ async fn walk<'a>(
             .map(|r| r.to_string())
             .unwrap_or_default();
         let name = node.name().await.ok();
+        let description = node.description().await.ok();
 
         let mut frame = None;
         let mut actions = Vec::new();
+        let mut value = None;
+        let mut checked = None;
+        let mut selected = None;
+
+        // The StateSet drives the role-aware booleans; read it once.
+        let states = node.get_state().await.ok();
+        let role_lower = role.to_ascii_lowercase();
+        let enabled = states.as_ref().map(|s| s.contains(atspi::State::Enabled));
+        if role_lower.contains("check") {
+            checked = states.as_ref().map(|s| s.contains(atspi::State::Checked));
+            selected = checked;
+        } else if role_lower.contains("radio")
+            || role_lower.contains("list item")
+            || role_lower.contains("menu item")
+            || matches!(role_lower.as_str(), "tab" | "page tab" | "tab item")
+        {
+            selected = states
+                .as_ref()
+                .map(|s| s.contains(atspi::State::Selected) || s.contains(atspi::State::Checked));
+        }
 
         if let Ok(proxies) = node.proxies().await {
             if let Ok(component) = proxies.component().await {
@@ -110,12 +141,41 @@ async fn walk<'a>(
                     }
                 }
             }
+            if let Ok(text) = proxies.text().await {
+                if let Ok(count) = text.character_count().await {
+                    if count > 0 {
+                        // Text content is where entry/typed text lives; the
+                        // accessible name of such widgets is often empty.
+                        if let Ok(t) = text.get_text(0, count.min(4096)).await {
+                            value = Some(t);
+                        }
+                    }
+                }
+            }
+            if value.is_none() {
+                if let Ok(value_proxy) = proxies.value().await {
+                    if let Ok(v) = value_proxy.current_value().await {
+                        value = Some(v.to_string());
+                    }
+                }
+            }
         }
+
+        // Surface Text content as the display name when the widget has no name.
+        let name = match name {
+            Some(n) if !n.trim().is_empty() => Some(n),
+            _ => value.clone(),
+        };
 
         elements.push(Element {
             index,
             role,
             name,
+            value,
+            checked,
+            enabled,
+            selected,
+            description,
             frame,
             actions,
             parent_index,
@@ -142,6 +202,11 @@ pub fn accessibility_tree(elements: &[Element]) -> AccessibilityTree {
                 index: e.index,
                 role: e.role.clone(),
                 name: e.name.clone(),
+                value: e.value.clone(),
+                checked: e.checked,
+                enabled: e.enabled,
+                selected: e.selected,
+                description: e.description.clone(),
                 frame: e.frame.clone(),
                 actions: e.actions.clone(),
                 parent_index: e.parent_index,

@@ -499,6 +499,21 @@ pub async fn get_window_state(state: &DaemonState, args: &Value) -> Result<Value
                     "actions": e.actions,
                     "depth": e.depth,
                 });
+                if let Some(v) = &e.value {
+                    node["value"] = json!(v);
+                }
+                if let Some(c) = e.checked {
+                    node["checked"] = json!(c);
+                }
+                if let Some(en) = e.enabled {
+                    node["enabled"] = json!(en);
+                }
+                if let Some(se) = e.selected {
+                    node["selected"] = json!(se);
+                }
+                if let Some(d) = &e.description {
+                    node["description"] = json!(d);
+                }
                 if let Some(p) = e.parent_index {
                     node["parent_index"] = json!(p);
                 }

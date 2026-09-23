@@ -9,5 +9,6 @@ lxh-core = { workspace = true }
 async-trait = { workspace = true }
 image = { workspace = true }
 atspi = { workspace = true }
+zbus = { workspace = true }
 tokio = { workspace = true }
 x11rb = { version = "0.13" }
