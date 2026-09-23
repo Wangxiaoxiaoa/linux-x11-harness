@@ -111,6 +111,8 @@ pub struct DisplayInfo {
 
 pub struct A11yElement {
     pub index: usize,
+    /// True when this element is part of the actionable set.
+    pub actionable: bool,
     pub role: String,
     pub name: Option<String>,
     /// Text-interface content for entries and text views.

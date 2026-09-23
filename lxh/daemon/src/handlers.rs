@@ -494,6 +494,7 @@ pub async fn get_window_state(state: &DaemonState, args: &Value) -> Result<Value
             .map(|e| {
                 let mut node = json!({
                     "index": e.index,
+                    "actionable": e.actionable,
                     "role": e.role,
                     "name": e.name,
                     "actions": e.actions,

@@ -228,6 +228,14 @@ impl A11yDriver for AtspiA11y {
         include_tree: bool,
         include_screenshot: bool,
     ) -> Result<GetWindowStateResult, LxhError> {
+        // Fail fast on a dead process with a clear message instead of an
+        // X11 BadDrawable from the capture path. Killed children linger in
+        // /proc as zombies until reaped, so the state check is required.
+        if !process_live(pid) {
+            return Err(LxhError::InvalidArgument(format!(
+                "pid {pid} is not running (the application may have exited)"
+            )));
+        }
         let display = self.display.clone();
         let tree_future = async {
             if include_tree {
@@ -288,29 +296,28 @@ impl A11yDriver for AtspiA11y {
                     .is_some_and(|a| a.map_state == x11rb::protocol::xproto::MapState::VIEWABLE);
 
                 // Display-absolute geometry (client geometry is relative to
-                // the WM frame).
+                // the WM frame). A window that is going away mid-enumeration
+                // loses its bounds but must not abort the listing.
                 let translated = conn
                     .translate_coordinates(window, root, 0, 0)
-                    .map_err(x11::xerr)?
-                    .reply()
-                    .map_err(x11::xerr)?;
-                let geom = conn
-                    .get_geometry(window)
-                    .map_err(x11::xerr)?
-                    .reply()
-                    .map_err(x11::xerr)?;
-                let bounds = Bounds {
-                    x: translated.dst_x as i32,
-                    y: translated.dst_y as i32,
-                    w: geom.width as u32,
-                    h: geom.height as u32,
+                    .ok()
+                    .and_then(|c| c.reply().ok());
+                let geom = conn.get_geometry(window).ok().and_then(|c| c.reply().ok());
+                let bounds = match (translated, geom) {
+                    (Some(t), Some(g)) => Some(Bounds {
+                        x: t.dst_x as i32,
+                        y: t.dst_y as i32,
+                        w: g.width as u32,
+                        h: g.height as u32,
+                    }),
+                    _ => None,
                 };
 
                 windows.push(WindowEntry {
                     id: window,
                     pid,
                     title: if title.is_empty() { None } else { Some(title) },
-                    bounds: Some(bounds),
+                    bounds,
                     z_index,
                     on_screen,
                 });
@@ -554,6 +561,20 @@ fn managed_windows(
     Ok(out)
 }
 
+/// A process is live when its /proc entry exists AND its state is not
+/// 'Z' (zombie) or 'X' (dead). A killed child stays in /proc as a zombie
+/// until its parent reaps it, so existence alone is not liveness.
+fn process_live(pid: u32) -> bool {
+    let Ok(status) = std::fs::read_to_string(format!("/proc/{pid}/status")) else {
+        return false;
+    };
+    status.lines().find_map(|line| {
+        line.strip_prefix("State:")
+            .and_then(|state| state.trim().chars().next())
+    })
+    .is_some_and(|state| !matches!(state, 'Z' | 'X'))
+}
+
 fn list_processes() -> Vec<ProcessEntry> {
     let mut processes = Vec::new();
     if let Ok(entries) = std::fs::read_dir("/proc") {
@@ -614,6 +635,7 @@ mod tests {
         let elements = vec![
             Element {
                 index: 0,
+                actionable: false,
                 role: "frame".into(),
                 name: Some("window".into()),
                 value: None,
@@ -633,6 +655,7 @@ mod tests {
             },
             Element {
                 index: 1,
+                actionable: true,
                 role: "button".into(),
                 name: Some("ok".into()),
                 value: None,

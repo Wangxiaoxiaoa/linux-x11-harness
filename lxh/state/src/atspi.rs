@@ -5,9 +5,50 @@ use atspi::proxy::proxy_ext::ProxyExt;
 use atspi::CoordType;
 use lxh_core::{A11yElement, AccessibilityTree, Bounds, LxhError};
 
+/// Whether a walked node is exposed as an indexed, usable element.
+///
+/// Passive roles (labels, statics, fillers, images) and inert containers
+/// would give agents entries they cannot operate on, so they stay outside
+/// the actionable set. This predicate is the single source of truth for
+/// what `actionable` means and MUST be applied identically in the tree
+/// walk and in every action path (`perform_action`, `set_value`);
+/// any divergence would desync what the agent sees from what it can act on.
+fn is_indexable(
+    role: &str,
+    has_action: bool,
+    has_editable: bool,
+    has_value: bool,
+    has_selectable_state: bool,
+    has_component: bool,
+    enabled: Option<bool>,
+) -> bool {
+    let normalized_role = role.trim().to_ascii_lowercase();
+    let passive = matches!(
+        normalized_role.as_str(),
+        "label" | "static" | "static text" | "separator" | "filler" | "image" | "icon"
+    );
+    let pixel_addressable_control = has_component
+        && enabled == Some(true)
+        && matches!(normalized_role.as_str(), "button" | "push button");
+    !passive
+        && (has_action
+            || has_editable
+            || has_value
+            || has_selectable_state
+            || pixel_addressable_control)
+        && enabled == Some(true)
+}
+
+/// Bounds for a single tree walk: huge trees (Chromium exposes hundreds of
+/// nodes) must fail fast instead of hanging the caller or exhausting memory.
+const WALK_DEADLINE: std::time::Duration = std::time::Duration::from_secs(30);
+const WALK_MAX_NODES: usize = 50_000;
+
 #[derive(Clone)]
 pub struct Element {
     pub index: usize,
+    /// True when this element is part of the actionable set (`is_indexable`).
+    pub actionable: bool,
     pub role: String,
     pub name: Option<String>,
     /// Text-interface content for entries and text views (their accessible
@@ -27,10 +68,11 @@ pub struct Element {
 }
 
 pub async fn walk_tree(pid: u32) -> Result<Vec<Element>, LxhError> {
-    // Zero tolerance for stale targets: an exited process may still be
-    // registered in AT-SPI for a while; fail with a clear error instead of
-    // returning an empty or half-valid tree.
-    if !std::path::Path::new(&format!("/proc/{pid}")).exists() {
+    // Zero tolerance for stale targets: a killed process lingers in /proc
+    // as a zombie until its parent reaps it, and may stay registered in
+    // AT-SPI even longer; fail with a clear error instead of returning an
+    // empty or half-valid tree.
+    if !super::process_live(pid) {
         return Err(LxhError::InvalidArgument(format!(
             "pid {pid} is not running (the application may have exited)"
         )));
@@ -67,7 +109,7 @@ pub async fn walk_tree(pid: u32) -> Result<Vec<Element>, LxhError> {
     }
 
     let app = app.ok_or_else(|| LxhError::DisplayNotFound(format!("pid {}", pid)))?;
-    Ok(walk(&conn, &app).await)
+    walk(&conn, &app).await
 }
 
 async fn pid_of(
@@ -82,11 +124,20 @@ async fn pid_of(
 async fn walk<'a>(
     conn: &'a AccessibilityConnection,
     root: &'a AccessibleProxy<'a>,
-) -> Vec<Element> {
+) -> Result<Vec<Element>, LxhError> {
     let mut elements = Vec::new();
     let mut stack: Vec<(AccessibleProxy<'a>, Option<usize>, usize)> = vec![(root.clone(), None, 0)];
+    let deadline = std::time::Instant::now() + WALK_DEADLINE;
 
     while let Some((node, parent_index, depth)) = stack.pop() {
+        if elements.len() >= WALK_MAX_NODES || std::time::Instant::now() > deadline {
+            return Err(LxhError::InvalidArgument(format!(
+                "accessibility tree walk exceeded its bounds ({} nodes, \
+                 unresponsive or pathologically large application); \
+                 retry or restart the application",
+                elements.len()
+            )));
+        }
         let index = elements.len();
         let role = node
             .get_role()
@@ -101,11 +152,20 @@ async fn walk<'a>(
         let mut value = None;
         let mut checked = None;
         let mut selected = None;
+        let mut has_editable = false;
+        let mut has_component = false;
 
         // The StateSet drives the role-aware booleans; read it once.
         let states = node.get_state().await.ok();
         let role_lower = role.to_ascii_lowercase();
-        let enabled = states.as_ref().map(|s| s.contains(atspi::State::Enabled));
+        // AT-SPI toolkits disagree: some expose only Enabled, others only
+        // Sensitive ("can receive input"). Either means usable.
+        let enabled = states
+            .as_ref()
+            .map(|s| s.contains(atspi::State::Enabled) || s.contains(atspi::State::Sensitive));
+        let has_selectable_state = states
+            .as_ref()
+            .is_some_and(|s| s.contains(atspi::State::Selectable));
         if role_lower.contains("check") {
             checked = states.as_ref().map(|s| s.contains(atspi::State::Checked));
             selected = checked;
@@ -128,8 +188,10 @@ async fn walk<'a>(
                         w: w as u32,
                         h: h as u32,
                     });
+                    has_component = true;
                 }
             }
+            has_editable = proxies.editable_text().await.is_ok();
             if let Ok(action) = proxies.action().await {
                 if let Ok(n) = action.n_actions().await {
                     for i in 0..n {
@@ -169,6 +231,15 @@ async fn walk<'a>(
 
         elements.push(Element {
             index,
+            actionable: is_indexable(
+                &role,
+                !actions.is_empty(),
+                has_editable,
+                value.is_some(),
+                has_selectable_state,
+                has_component,
+                enabled,
+            ),
             role,
             name,
             value,
@@ -191,28 +262,32 @@ async fn walk<'a>(
         }
     }
 
-    elements
+    Ok(elements)
 }
 
 pub fn accessibility_tree(elements: &[Element]) -> AccessibilityTree {
     AccessibilityTree {
-        elements: elements
-            .iter()
-            .map(|e| A11yElement {
-                index: e.index,
-                role: e.role.clone(),
-                name: e.name.clone(),
-                value: e.value.clone(),
-                checked: e.checked,
-                enabled: e.enabled,
-                selected: e.selected,
-                description: e.description.clone(),
-                frame: e.frame.clone(),
-                actions: e.actions.clone(),
-                parent_index: e.parent_index,
-                depth: e.depth,
-            })
-            .collect(),
+        elements: elements.iter().map(A11yElement::from).collect(),
+    }
+}
+
+impl From<&Element> for A11yElement {
+    fn from(e: &Element) -> Self {
+        Self {
+            index: e.index,
+            actionable: e.actionable,
+            role: e.role.clone(),
+            name: e.name.clone(),
+            value: e.value.clone(),
+            checked: e.checked,
+            enabled: e.enabled,
+            selected: e.selected,
+            description: e.description.clone(),
+            frame: e.frame.clone(),
+            actions: e.actions.clone(),
+            parent_index: e.parent_index,
+            depth: e.depth,
+        }
     }
 }
 
@@ -445,19 +520,10 @@ pub async fn perform_action(pid: u32, index: usize) -> Result<String, LxhError> 
     const ACTIVATION_VERBS: [&str; 8] = [
         "press", "click", "activate", "open", "toggle", "expand", "choose", "confirm",
     ];
-    const PASSIVE_ROLES: [&str; 6] = [
-        "label",
-        "static",
-        "image",
-        "heading",
-        "separator",
-        "scroll bar",
-    ];
 
-    let role_lower = target.role.to_ascii_lowercase();
-    if target.actions.is_empty() || PASSIVE_ROLES.iter().any(|r| role_lower.contains(r)) {
+    if !target.actionable {
         return Err(LxhError::InvalidArgument(format!(
-            "suspected_noop: element {index} ({}) advertises no activation action; \
+            "suspected_noop: element {index} ({}) is not actionable; \
              use a coordinate click instead",
             target.role
         )));
