@@ -568,11 +568,13 @@ fn process_live(pid: u32) -> bool {
     let Ok(status) = std::fs::read_to_string(format!("/proc/{pid}/status")) else {
         return false;
     };
-    status.lines().find_map(|line| {
-        line.strip_prefix("State:")
-            .and_then(|state| state.trim().chars().next())
-    })
-    .is_some_and(|state| !matches!(state, 'Z' | 'X'))
+    status
+        .lines()
+        .find_map(|line| {
+            line.strip_prefix("State:")
+                .and_then(|state| state.trim().chars().next())
+        })
+        .is_some_and(|state| !matches!(state, 'Z' | 'X'))
 }
 
 fn list_processes() -> Vec<ProcessEntry> {
