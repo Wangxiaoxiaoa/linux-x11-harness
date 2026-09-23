@@ -70,46 +70,46 @@ pub struct Element {
 pub async fn walk_tree(pid: u32) -> Result<Vec<Element>, LxhError> {
     // Zero tolerance for stale targets: a killed process lingers in /proc
     // as a zombie until its parent reaps it, and may stay registered in
-    // AT-SPI even longer; fail with a clear error instead of returning an
-    // empty or half-valid tree.
+    // AT-SPI even longer; app_accessible fails with a clear error.
+    let (conn, app_ref) = app_accessible(pid).await?;
+    let app = conn
+        .object_as_accessible(&app_ref)
+        .await
+        .map_err(|e| LxhError::ProcessSpawnFailed(e.to_string()))?;
+    walk(&conn, &app).await
+}
+
+/// Connect to the accessibility registry and resolve the application
+/// root for `pid`. Shared by every AT-SPI entry point (tree walk, value
+/// writes, menu and element actions); also the stale-target guard.
+async fn app_accessible(
+    pid: u32,
+) -> Result<(AccessibilityConnection, atspi::ObjectRefOwned), LxhError> {
     if !super::process_live(pid) {
         return Err(LxhError::InvalidArgument(format!(
             "pid {pid} is not running (the application may have exited)"
         )));
     }
-
     let conn = AccessibilityConnection::new()
         .await
         .map_err(|e| LxhError::ProcessSpawnFailed(e.to_string()))?;
-
     let root = conn
         .root_accessible_on_registry()
         .await
         .map_err(|e| LxhError::ProcessSpawnFailed(e.to_string()))?;
-
     let dbus = atspi::zbus::fdo::DBusProxy::new(conn.connection())
         .await
         .map_err(|e| LxhError::ProcessSpawnFailed(e.to_string()))?;
-
     let children = root
         .get_children()
         .await
         .map_err(|e| LxhError::ProcessSpawnFailed(e.to_string()))?;
-
-    let mut app = None;
     for child_ref in children {
         if pid_of(&dbus, &child_ref).await == Some(pid) {
-            app = Some(
-                conn.object_as_accessible(&child_ref)
-                    .await
-                    .map_err(|e| LxhError::ProcessSpawnFailed(e.to_string()))?,
-            );
-            break;
+            return Ok((conn, child_ref));
         }
     }
-
-    let app = app.ok_or_else(|| LxhError::DisplayNotFound(format!("pid {}", pid)))?;
-    walk(&conn, &app).await
+    Err(LxhError::DisplayNotFound(format!("pid {}", pid)))
 }
 
 async fn pid_of(
@@ -292,38 +292,25 @@ impl From<&Element> for A11yElement {
 }
 
 pub async fn set_value(pid: u32, index: usize, value: &str) -> Result<(), LxhError> {
-    let conn = AccessibilityConnection::new()
-        .await
-        .map_err(|e| LxhError::ProcessSpawnFailed(e.to_string()))?;
-
-    let root = conn
-        .root_accessible_on_registry()
-        .await
-        .map_err(|e| LxhError::ProcessSpawnFailed(e.to_string()))?;
-
-    let dbus = atspi::zbus::fdo::DBusProxy::new(conn.connection())
-        .await
-        .map_err(|e| LxhError::ProcessSpawnFailed(e.to_string()))?;
-
-    let children = root
-        .get_children()
-        .await
-        .map_err(|e| LxhError::ProcessSpawnFailed(e.to_string()))?;
-
-    let mut app = None;
-    for child_ref in children {
-        if pid_of(&dbus, &child_ref).await == Some(pid) {
-            app = Some(
-                conn.object_as_accessible(&child_ref)
-                    .await
-                    .map_err(|e| LxhError::ProcessSpawnFailed(e.to_string()))?,
-            );
-            break;
-        }
+    let elements = walk_tree(pid).await?;
+    let target = elements.get(index).ok_or_else(|| {
+        LxhError::InvalidArgument(format!(
+            "element {index} not found (total: {})",
+            elements.len()
+        ))
+    })?;
+    if !target.actionable {
+        return Err(LxhError::InvalidArgument(format!(
+            "suspected_noop: element {index} ({}) is not actionable",
+            target.role
+        )));
     }
 
-    let app = app.ok_or_else(|| LxhError::DisplayNotFound(format!("pid {}", pid)))?;
-
+    let (conn, app_ref) = app_accessible(pid).await?;
+    let app = conn
+        .object_as_accessible(&app_ref)
+        .await
+        .map_err(|e| LxhError::ProcessSpawnFailed(e.to_string()))?;
     let node = walk_to_index(&conn, &app, index)
         .await?
         .ok_or(LxhError::NotSupported)?;
@@ -366,7 +353,12 @@ async fn focused_node_is_editable(
     dbus: &atspi::zbus::fdo::DBusProxy<'_>,
     pid: u32,
     node: &AccessibleProxy<'_>,
+    budget: &mut usize,
 ) -> Result<bool, LxhError> {
+    if *budget == 0 {
+        return Ok(false);
+    }
+    *budget -= 1;
     if let Ok(states) = node.get_state().await {
         if states.contains(atspi::State::Focused) {
             let proxies = node.proxies().await.map_err(|_| LxhError::NotSupported)?;
@@ -381,7 +373,7 @@ async fn focused_node_is_editable(
             if pid_of(dbus, &child_ref).await != Some(pid) {
                 continue;
             }
-            if Box::pin(focused_node_is_editable(conn, dbus, pid, &child)).await? {
+            if Box::pin(focused_node_is_editable(conn, dbus, pid, &child, budget)).await? {
                 return Ok(true);
             }
         }
@@ -390,32 +382,17 @@ async fn focused_node_is_editable(
 }
 
 pub async fn focused_is_editable(pid: u32) -> Result<bool, LxhError> {
-    let conn = AccessibilityConnection::new()
-        .await
-        .map_err(|e| LxhError::ProcessSpawnFailed(e.to_string()))?;
-    let root = conn
-        .root_accessible_on_registry()
+    let (conn, app_ref) = app_accessible(pid).await?;
+    let app = conn
+        .object_as_accessible(&app_ref)
         .await
         .map_err(|e| LxhError::ProcessSpawnFailed(e.to_string()))?;
     let dbus = atspi::zbus::fdo::DBusProxy::new(conn.connection())
         .await
         .map_err(|e| LxhError::ProcessSpawnFailed(e.to_string()))?;
-
-    let children = root
-        .get_children()
-        .await
-        .map_err(|e| LxhError::ProcessSpawnFailed(e.to_string()))?;
-    for child_ref in children {
-        if pid_of(&dbus, &child_ref).await != Some(pid) {
-            continue;
-        }
-        let app = conn
-            .object_as_accessible(&child_ref)
-            .await
-            .map_err(|e| LxhError::ProcessSpawnFailed(e.to_string()))?;
-        if focused_node_is_editable(&conn, &dbus, pid, &app).await? {
-            return Ok(true);
-        }
+    let mut budget = WALK_MAX_NODES;
+    if focused_node_is_editable(&conn, &dbus, pid, &app, &mut budget).await? {
+        return Ok(true);
     }
     Ok(false)
 }
@@ -424,34 +401,6 @@ pub async fn focused_is_editable(pid: u32) -> Result<bool, LxhError> {
 /// (focus-free: GrabFocus gives the widget internal keyboard focus
 /// without raising the window).
 pub async fn type_into_editable(pid: u32, text: &str) -> Result<(), LxhError> {
-    let conn = AccessibilityConnection::new()
-        .await
-        .map_err(|e| LxhError::ProcessSpawnFailed(e.to_string()))?;
-    let root = conn
-        .root_accessible_on_registry()
-        .await
-        .map_err(|e| LxhError::ProcessSpawnFailed(e.to_string()))?;
-    let dbus = atspi::zbus::fdo::DBusProxy::new(conn.connection())
-        .await
-        .map_err(|e| LxhError::ProcessSpawnFailed(e.to_string()))?;
-
-    let children = root
-        .get_children()
-        .await
-        .map_err(|e| LxhError::ProcessSpawnFailed(e.to_string()))?;
-    let mut app = None;
-    for child_ref in children {
-        if pid_of(&dbus, &child_ref).await == Some(pid) {
-            app = Some(
-                conn.object_as_accessible(&child_ref)
-                    .await
-                    .map_err(|e| LxhError::ProcessSpawnFailed(e.to_string()))?,
-            );
-            break;
-        }
-    }
-    let app = app.ok_or_else(|| LxhError::DisplayNotFound(format!("pid {}", pid)))?;
-
     let elements = walk_tree(pid).await?;
     let editable_idx = elements
         .iter()
@@ -465,7 +414,11 @@ pub async fn type_into_editable(pid: u32, text: &str) -> Result<(), LxhError> {
         .ok_or_else(|| {
             LxhError::InvalidArgument(format!("pid {pid} exposes no editable element"))
         })?;
-
+    let (conn, app_ref) = app_accessible(pid).await?;
+    let app = conn
+        .object_as_accessible(&app_ref)
+        .await
+        .map_err(|e| LxhError::ProcessSpawnFailed(e.to_string()))?;
     let node = walk_to_index(&conn, &app, editable_idx)
         .await?
         .ok_or(LxhError::NotSupported)?;
@@ -538,32 +491,11 @@ pub async fn perform_action(pid: u32, index: usize) -> Result<String, LxhError> 
         })
         .unwrap_or(&target.actions[0]);
 
-    let conn = AccessibilityConnection::new()
+    let (conn, app_ref) = app_accessible(pid).await?;
+    let app = conn
+        .object_as_accessible(&app_ref)
         .await
         .map_err(|e| LxhError::ProcessSpawnFailed(e.to_string()))?;
-    let root = conn
-        .root_accessible_on_registry()
-        .await
-        .map_err(|e| LxhError::ProcessSpawnFailed(e.to_string()))?;
-    let dbus = atspi::zbus::fdo::DBusProxy::new(conn.connection())
-        .await
-        .map_err(|e| LxhError::ProcessSpawnFailed(e.to_string()))?;
-    let children = root
-        .get_children()
-        .await
-        .map_err(|e| LxhError::ProcessSpawnFailed(e.to_string()))?;
-    let mut app = None;
-    for child_ref in children {
-        if pid_of(&dbus, &child_ref).await == Some(pid) {
-            app = Some(
-                conn.object_as_accessible(&child_ref)
-                    .await
-                    .map_err(|e| LxhError::ProcessSpawnFailed(e.to_string()))?,
-            );
-            break;
-        }
-    }
-    let app = app.ok_or_else(|| LxhError::DisplayNotFound(format!("pid {}", pid)))?;
 
     let node = walk_to_index(&conn, &app, index)
         .await?
@@ -647,32 +579,11 @@ pub async fn invoke_menu(pid: u32, path: &[String]) -> Result<(), LxhError> {
             ))
         })?;
 
-    let conn = AccessibilityConnection::new()
+    let (conn, app_ref) = app_accessible(pid).await?;
+    let app = conn
+        .object_as_accessible(&app_ref)
         .await
         .map_err(|e| LxhError::ProcessSpawnFailed(e.to_string()))?;
-    let root = conn
-        .root_accessible_on_registry()
-        .await
-        .map_err(|e| LxhError::ProcessSpawnFailed(e.to_string()))?;
-    let dbus = atspi::zbus::fdo::DBusProxy::new(conn.connection())
-        .await
-        .map_err(|e| LxhError::ProcessSpawnFailed(e.to_string()))?;
-    let children = root
-        .get_children()
-        .await
-        .map_err(|e| LxhError::ProcessSpawnFailed(e.to_string()))?;
-    let mut app = None;
-    for child_ref in children {
-        if pid_of(&dbus, &child_ref).await == Some(pid) {
-            app = Some(
-                conn.object_as_accessible(&child_ref)
-                    .await
-                    .map_err(|e| LxhError::ProcessSpawnFailed(e.to_string()))?,
-            );
-            break;
-        }
-    }
-    let app = app.ok_or_else(|| LxhError::DisplayNotFound(format!("pid {}", pid)))?;
 
     let node = walk_to_index(&conn, &app, current)
         .await?
