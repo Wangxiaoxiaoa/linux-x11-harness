@@ -52,6 +52,28 @@ Displays created on this machine automatically open a read-only preview window o
 {"jsonrpc":"2.0","id":5,"method":"tools/call","params":{"name":"lxh_display_destroy","arguments":{"display_id":"d-99"}}}
 ```
 
+## Tool categories
+
+| Category | Tools |
+|---|---|
+| Display | `lxh_display_create` `lxh_display_destroy` `lxh_display_attach` `lxh_display_detach` `lxh_display_info` |
+| Apps | `lxh_app_launch` `lxh_app_terminate` `lxh_list_apps` |
+| Input | `lxh_input_click` `lxh_input_move` `lxh_input_type` `lxh_input_key` `lxh_input_scroll` `lxh_input_drag` `lxh_input_get_cursor_position` |
+| Capture | `lxh_capture_screenshot` `lxh_capture_window` `lxh_zoom` |
+| State | `lxh_get_desktop_overview` `lxh_get_window_state` |
+| AT-SPI | `lxh_set_value` `lxh_click_element` `lxh_invoke_menu` `lxh_verify_state` |
+| Window | `lxh_window_focus` `lxh_window_set_frame` `lxh_window_close` |
+| Clipboard | `lxh_clipboard_get` `lxh_clipboard_set` |
+| Preview | `lxh_preview_open` `lxh_preview_close` |
+| Wait | `lxh_wait` |
+
+Notable parameters:
+
+- `lxh_input_click` / `lxh_input_move` / `lxh_input_drag` accept `from_zoom: true` to interpret coordinates in the last `lxh_zoom` image instead of display coordinates.
+- `lxh_input_type` accepts an optional `pid` to enable AT-SPI text writing when the focused widget is not editable.
+- `lxh_click_element` / `lxh_set_value` accept an optional `identity` string (from `lxh_get_window_state` elements) for drift-proof targeting.
+- `lxh_get_desktop_overview` accepts `pid` and `on_screen_only` filters.
+
 ## Run tests
 
 ```bash

@@ -24,7 +24,9 @@ Typical uses:
 - Let an agent operate a GUI app without taking over your real desktop.
 - Watch what the agent is doing live in a small preview window.
 - Run end-to-end tests that need real input, focus, and screenshots.
-- Capture accessibility trees or screen recordings for verification.
+- Capture accessibility trees or click UI elements programmatically.
+- Discover installed/running apps and launch them by name.
+- Invoke application menus by path and assert UI state after actions.
 
 ## Quick start
 
