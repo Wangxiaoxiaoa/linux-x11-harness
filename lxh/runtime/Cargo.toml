@@ -6,6 +6,7 @@ license.workspace = true
 
 [dependencies]
 lxh-core = { workspace = true }
+lxh-driver = { workspace = true }
 tokio = { workspace = true }
 uuid = { workspace = true }
 x11rb = { workspace = true }

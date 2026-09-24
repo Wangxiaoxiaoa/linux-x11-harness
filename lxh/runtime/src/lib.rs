@@ -49,3 +49,34 @@ impl Default for Runtime {
         Self::new()
     }
 }
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use lxh_core::{CaptureDriver, InputDriver, MouseButton};
+
+    #[tokio::test]
+    async fn sdk_driver_access() {
+        let runtime = Runtime::new();
+        let mut display = runtime
+            .create_display(DisplayConfig {
+                width: 400,
+                height: 300,
+                depth: 24,
+            })
+            .await
+            .expect("create display");
+
+        let driver = display.driver();
+        driver.move_mouse(200, 150).await.expect("move");
+        let (x, y) = driver.get_cursor_position().await.expect("cursor");
+        assert_eq!((x, y), (200, 150));
+        let shot = driver.screenshot().await.expect("screenshot");
+        assert!(!shot.data.is_empty());
+        driver
+            .click(x, y, MouseButton::Left, 1)
+            .await
+            .expect("click");
+
+        display.destroy().await.expect("destroy");
+    }
+}

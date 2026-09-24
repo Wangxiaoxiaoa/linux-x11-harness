@@ -1,4 +1,6 @@
 use lxh_core::{DisplayInfo, LxhError};
+use lxh_driver::DefaultDriver;
+use std::sync::Arc;
 
 use crate::process::ManagedProcess;
 use crate::wm::OpenboxWM;
@@ -36,6 +38,7 @@ pub struct Display {
     xserver: Option<ManagedProcess>,
     wm: Option<ManagedProcess>,
     apps: std::sync::Mutex<Vec<ManagedProcess>>,
+    driver: Arc<DefaultDriver>,
 }
 
 impl Display {
@@ -49,6 +52,8 @@ impl Display {
 
         let wm = OpenboxWM::start(&display).await?;
 
+        let driver = Arc::new(DefaultDriver::new(&display)?);
+
         Ok(Self {
             id,
             display: display.clone(),
@@ -58,10 +63,13 @@ impl Display {
             xserver: Some(xserver),
             wm: Some(wm),
             apps: std::sync::Mutex::new(Vec::new()),
+            driver,
         })
     }
 
     pub async fn attach(id: String, display: String) -> Result<Self, LxhError> {
+        let driver = Arc::new(DefaultDriver::new(&display)?);
+
         Ok(Self {
             id,
             display: display.clone(),
@@ -71,6 +79,7 @@ impl Display {
             xserver: None,
             wm: None,
             apps: std::sync::Mutex::new(Vec::new()),
+            driver,
         })
     }
 
@@ -107,6 +116,13 @@ impl Display {
             apps.remove(pos)
         };
         proc.kill().await
+    }
+
+    /// Access the automation driver for this display. Provides the full
+    /// SDK surface: click, type, screenshot, AT-SPI, window management,
+    /// clipboard, etc.
+    pub fn driver(&self) -> &DefaultDriver {
+        &self.driver
     }
 
     pub fn info(&self) -> DisplayInfo {
