@@ -18,6 +18,30 @@ Use this skill when you need to control Linux GUI applications without touching 
 - Discover installed/running apps and invoke their menus by path.
 - Assert UI state after actions without reading screenshots manually.
 
+## When NOT to use
+
+Before calling any `lxh_*` tool, check if the requested app is already
+running on the user's default display (`:0`):
+
+```bash
+pgrep -x chromium        # is the process running?
+wmctrl -l                # list windows on the user's desktop
+```
+
+- **App already open on the user's desktop** → do NOT create an isolated
+  display. Use `wmctrl -a <title>` to focus it, or interact with it
+  directly via shell. The user probably just wants you to use the app
+  they already have open.
+- **App not running, user says "open X"** → still ask: does the user
+  want to see it on their desktop, or do they want you to automate it?
+  If they just want to see it, launch it on `:0` with shell commands.
+- **User says "automate", "test", "control remotely", "in a sandbox",
+  or the task requires repeated programmatic interaction** → use this
+  skill to create an isolated display.
+
+In short: this skill is for **agent-driven GUI automation in isolation**,
+not for simply opening apps on the user's desktop.
+
 ## How to call the tools
 
 The `lxh_*` tools are served by a background daemon. Depending on your
