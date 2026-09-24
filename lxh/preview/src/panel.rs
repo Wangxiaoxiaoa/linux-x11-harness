@@ -15,6 +15,7 @@ use x11rb::rust_connection::RustConnection;
 
 use crate::cell::{CellChrome, CellEvent, CellRect, PreviewCell};
 use crate::container::{ContainerEvent, ContainerState, PreviewContainer};
+use crate::expando::{ExpandoEvent, ExpandoHandle};
 use crate::geometry::ScreenMetrics;
 use crate::layout::{
     cell_slots, panel_layout, total_pages, visible_count, CellSlot, PAGE_CAPACITY,
@@ -30,6 +31,10 @@ const PANEL_TITLE: &str = "LXH Previews";
 struct CellEntry {
     display_id: String,
     cell: PreviewCell,
+    /// Target display string (e.g. ":142"), needed to open the expando.
+    target_display: String,
+    /// Title shown by the cell (and reused by the expando).
+    title: String,
     /// Fitted content size for the cell (from the target display's
     /// resolution), used by the layout.
     size: (u32, u32),
@@ -40,6 +45,10 @@ struct PanelInner {
     container: Option<PreviewContainer>,
     cells: Vec<CellEntry>,
     page: usize,
+    /// The open interactive expando, if any: (display_id, handle).
+    expando: Option<(String, ExpandoHandle)>,
+    /// Sender the expando reports its closure on.
+    expando_tx: mpsc::Sender<ExpandoEvent>,
     /// Set when the container died (user display gone); stops re-layout.
     broken: bool,
 }
@@ -59,19 +68,23 @@ impl Default for PreviewPanel {
 
 impl PreviewPanel {
     pub fn new() -> Self {
+        let (cell_tx, cell_rx) = mpsc::channel::<CellEvent>();
+        let (container_tx, container_rx) = mpsc::channel::<ContainerEvent>();
+        let (expando_tx, expando_rx) = mpsc::channel::<ExpandoEvent>();
         let inner = Arc::new(Mutex::new(PanelInner {
             metrics: None,
             container: None,
             cells: Vec::new(),
             page: 0,
+            expando: None,
+            expando_tx: expando_tx.clone(),
             broken: false,
         }));
-        let (cell_tx, cell_rx) = mpsc::channel::<CellEvent>();
-        let (container_tx, container_rx) = mpsc::channel::<ContainerEvent>();
 
-        // Background loop: consume cell/container events and re-layout. Cells
-        // and the container report through two channels; both are polled here
-        // (all preview paths are polling-based already).
+        // Background loop: consume cell/container/expando events and
+        // re-layout. Cells, the container and the expando report through
+        // three channels; all are polled here (all preview paths are
+        // polling-based already).
         let inner2 = Arc::clone(&inner);
         thread::spawn(move || loop {
             let mut dirty = false;
@@ -84,6 +97,14 @@ impl PreviewPanel {
                 while let Ok(event) = container_rx.try_recv() {
                     handle_container_event(&mut guard, event);
                     dirty = true;
+                }
+                while let Ok(ExpandoEvent::Closed) = expando_rx.try_recv() {
+                    // A dead expando reported closure. Drop our handle only
+                    // if it is the dead one (a replacement started meanwhile
+                    // is still alive).
+                    if guard.expando.as_ref().is_some_and(|(_, h)| !h.is_alive()) {
+                        guard.expando = None;
+                    }
                 }
                 if dirty {
                     reflow(&mut guard);
@@ -199,6 +220,8 @@ impl PreviewPanel {
         inner.cells.push(CellEntry {
             display_id: display_id.to_string(),
             cell,
+            target_display: target_display.to_string(),
+            title: cell_title,
             size: fitted,
         });
         inner.page = page;
@@ -220,6 +243,9 @@ impl PreviewPanel {
 impl Drop for PreviewPanel {
     fn drop(&mut self) {
         let mut inner = self.inner.lock().unwrap();
+        if let Some((_, handle)) = inner.expando.take() {
+            handle.stop();
+        }
         for entry in inner.cells.drain(..) {
             entry.cell.stop();
         }
@@ -230,12 +256,47 @@ impl Drop for PreviewPanel {
 }
 
 fn handle_cell_event(inner: &mut PanelInner, event: CellEvent) {
-    let display_id = match &event {
-        CellEvent::Closed { display_id } | CellEvent::DisplayGone { display_id } => display_id,
+    match &event {
+        CellEvent::Expanded { display_id } => toggle_expando(inner, display_id),
+        CellEvent::Closed { display_id } | CellEvent::DisplayGone { display_id } => {
+            if let Some(pos) = inner.cells.iter().position(|c| c.display_id == *display_id) {
+                let entry = inner.cells.remove(pos);
+                entry.cell.stop();
+            }
+            // If the expando mirrored this display, close it too.
+            if inner
+                .expando
+                .as_ref()
+                .is_some_and(|(id, _)| id == display_id)
+            {
+                if let Some((_, handle)) = inner.expando.take() {
+                    handle.stop();
+                }
+            }
+        }
+    }
+}
+
+/// Double-click toggle: same display -> close; other/none -> (re)open.
+fn toggle_expando(inner: &mut PanelInner, display_id: &str) {
+    if let Some((current, handle)) = inner.expando.take() {
+        handle.stop();
+        if current == display_id {
+            return; // toggle closed
+        }
+    }
+    let Some(entry) = inner
+        .cells
+        .iter()
+        .find(|c| c.display_id == display_id)
+        .map(|c| (c.target_display.clone(), c.title.clone()))
+    else {
+        return;
     };
-    if let Some(pos) = inner.cells.iter().position(|c| c.display_id == *display_id) {
-        let entry = inner.cells.remove(pos);
-        entry.cell.stop();
+    let (target_display, title) = entry;
+    match ExpandoHandle::start(&target_display, &title, inner.expando_tx.clone()) {
+        Ok(handle) => inner.expando = Some((display_id.to_string(), handle)),
+        Err(e) => eprintln!("preview expando unavailable for {display_id}: {e}"),
     }
 }
 

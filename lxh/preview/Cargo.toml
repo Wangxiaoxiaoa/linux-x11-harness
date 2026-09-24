@@ -6,6 +6,7 @@ license.workspace = true
 
 [dependencies]
 lxh-core = { workspace = true }
+lxh-action = { workspace = true }
 image = { workspace = true }
 tokio = { workspace = true }
 x11rb = { workspace = true }

@@ -10,55 +10,171 @@ use x11rb::protocol::xproto::{
 use x11rb::protocol::xtest::ConnectionExt as _;
 use x11rb::rust_connection::RustConnection;
 
-fn keysym_for_char(ch: char) -> Option<u32> {
-    x11_keysymdef::lookup_by_codepoint(ch).map(|r| r.keysym)
-}
+/// Blocking XTEST helpers shared by the async driver and the interactive
+/// preview expando. Every function operates on an already-open connection
+/// to the target display; none of them require a tokio runtime.
+pub mod raw {
+    use super::*;
+    use x11rb::protocol::xproto::{GetKeyboardMappingReply, Window};
 
-fn keysym_for_name(name: &str) -> Option<u32> {
-    x11_keysymdef::lookup_by_name(name).map(|r| r.keysym)
-}
-
-fn keycode_for_keysym(
-    mapping: &x11rb::protocol::xproto::GetKeyboardMappingReply,
-    keysym: u32,
-) -> Option<(u8, bool)> {
-    let per = mapping.keysyms_per_keycode as usize;
-    if per == 0 {
-        return None;
+    /// Round-trip to the X server so every buffered request (key/button
+    /// transitions) is actually delivered before this short-lived connection
+    /// closes. X11 requests are client-buffered: without the round trip the
+    /// server may process a press and its release back to back, erasing any
+    /// intended hold interval, and a closing connection loses requests that
+    /// are still in flight.
+    pub fn deliver(conn: &RustConnection) -> Result<(), LxhError> {
+        conn.flush().map_err(x11::xerr)?;
+        conn.get_input_focus()
+            .map_err(x11::xerr)?
+            .reply()
+            .map_err(x11::xerr)?;
+        Ok(())
     }
-    for (i, syms) in mapping.keysyms.chunks(per).enumerate() {
-        if syms.first() == Some(&keysym) {
-            return Some(((8 + i) as u8, false));
+
+    pub fn get_mapping(conn: &RustConnection) -> Result<GetKeyboardMappingReply, LxhError> {
+        conn.get_keyboard_mapping(8, 248)
+            .map_err(x11::xerr)?
+            .reply()
+            .map_err(x11::xerr)
+    }
+
+    pub fn keysym_for_char(ch: char) -> Option<u32> {
+        x11_keysymdef::lookup_by_codepoint(ch).map(|r| r.keysym)
+    }
+
+    pub fn keysym_for_name(name: &str) -> Option<u32> {
+        x11_keysymdef::lookup_by_name(name).map(|r| r.keysym)
+    }
+
+    /// The keysym produced by `keycode` at `level` (0 = base, 1 = shifted).
+    pub fn keysym_at(mapping: &GetKeyboardMappingReply, keycode: u8, level: usize) -> Option<u32> {
+        let per = mapping.keysyms_per_keycode as usize;
+        if per == 0 || keycode < 8 {
+            return None;
         }
-        if per > 1 && syms.get(1) == Some(&keysym) {
-            return Some(((8 + i) as u8, true));
+        let idx = (keycode as usize - 8) * per + level;
+        match mapping.keysyms.get(idx) {
+            Some(&0) | None => None,
+            Some(&keysym) => Some(keysym),
         }
     }
-    None
-}
 
-/// Round-trip to the X server so every buffered request (key/button
-/// transitions) is actually delivered before this short-lived connection
-/// closes. X11 requests are client-buffered: without the round trip the
-/// server may process a press and its release back to back, erasing any
-/// intended hold interval, and a closing connection loses requests that
-/// are still in flight.
-fn deliver(conn: &RustConnection) -> Result<(), LxhError> {
-    conn.flush().map_err(x11::xerr)?;
-    conn.get_input_focus()
-        .map_err(x11::xerr)?
-        .reply()
-        .map_err(x11::xerr)?;
-    Ok(())
-}
+    pub fn keycode_for_keysym(
+        mapping: &GetKeyboardMappingReply,
+        keysym: u32,
+    ) -> Option<(u8, bool)> {
+        let per = mapping.keysyms_per_keycode as usize;
+        if per == 0 {
+            return None;
+        }
+        for (i, syms) in mapping.keysyms.chunks(per).enumerate() {
+            if syms.first() == Some(&keysym) {
+                return Some(((8 + i) as u8, false));
+            }
+            if per > 1 && syms.get(1) == Some(&keysym) {
+                return Some(((8 + i) as u8, true));
+            }
+        }
+        None
+    }
 
-fn get_mapping(
-    conn: &RustConnection,
-) -> Result<x11rb::protocol::xproto::GetKeyboardMappingReply, LxhError> {
-    conn.get_keyboard_mapping(8, 248)
-        .map_err(x11::xerr)?
-        .reply()
-        .map_err(x11::xerr)
+    pub fn press(conn: &RustConnection, keycode: u8, down: bool) -> Result<(), LxhError> {
+        let event = if down {
+            KEY_PRESS_EVENT
+        } else {
+            KEY_RELEASE_EVENT
+        };
+        conn.xtest_fake_input(event, keycode, 0, x11rb::NONE, 0, 0, 0)
+            .map_err(x11::xerr)?
+            .check()
+            .map_err(x11::xerr)
+    }
+
+    pub fn mouse_button_number(button: MouseButton) -> u8 {
+        match button {
+            MouseButton::Left => 1,
+            MouseButton::Middle => 2,
+            MouseButton::Right => 3,
+        }
+    }
+
+    /// Warp the pointer to `(x, y)` and press or release one button there.
+    pub fn button(
+        conn: &RustConnection,
+        root: Window,
+        x: i32,
+        y: i32,
+        button: u8,
+        down: bool,
+    ) -> Result<(), LxhError> {
+        let event = if down {
+            BUTTON_PRESS_EVENT
+        } else {
+            BUTTON_RELEASE_EVENT
+        };
+        conn.warp_pointer(x11rb::NONE, root, 0, 0, 0, 0, x as i16, y as i16)
+            .map_err(x11::xerr)?
+            .check()
+            .map_err(x11::xerr)?;
+        conn.xtest_fake_input(event, button, 0, root, x as i16, y as i16, 0)
+            .map_err(x11::xerr)?
+            .check()
+            .map_err(x11::xerr)?;
+        deliver(conn)
+    }
+
+    /// Warp to `(x, y)` and click `count` times.
+    pub fn click(
+        conn: &RustConnection,
+        root: Window,
+        x: i32,
+        y: i32,
+        which: MouseButton,
+        count: u32,
+    ) -> Result<(), LxhError> {
+        let btn = mouse_button_number(which);
+        for i in 0..count.max(1) {
+            if i > 0 {
+                thread::sleep(Duration::from_millis(50));
+            }
+            button(conn, root, x, y, btn, true)?;
+            button(conn, root, x, y, btn, false)?;
+        }
+        Ok(())
+    }
+
+    /// Warp the pointer to `(x, y)`.
+    pub fn move_to(conn: &RustConnection, root: Window, x: i32, y: i32) -> Result<(), LxhError> {
+        conn.warp_pointer(x11rb::NONE, root, 0, 0, 0, 0, x as i16, y as i16)
+            .map_err(x11::xerr)?
+            .check()
+            .map_err(x11::xerr)?;
+        deliver(conn)
+    }
+
+    /// Scroll by `(dx, dy)` wheel steps at the current pointer position.
+    pub fn wheel(conn: &RustConnection, root: Window, dx: i32, dy: i32) -> Result<(), LxhError> {
+        let click = |button: u8| -> Result<(), LxhError> {
+            conn.xtest_fake_input(BUTTON_PRESS_EVENT, button, 0, root, 0, 0, 0)
+                .map_err(x11::xerr)?
+                .check()
+                .map_err(x11::xerr)?;
+            conn.xtest_fake_input(BUTTON_RELEASE_EVENT, button, 0, root, 0, 0, 0)
+                .map_err(x11::xerr)?
+                .check()
+                .map_err(x11::xerr)?;
+            Ok(())
+        };
+
+        for _ in 0..dy.abs() {
+            click(if dy > 0 { 5 } else { 4 })?;
+        }
+        for _ in 0..dx.abs() {
+            click(if dx > 0 { 7 } else { 6 })?;
+        }
+        deliver(conn)
+    }
 }
 
 pub struct XtestInput {
@@ -71,14 +187,6 @@ impl XtestInput {
         Ok(Self {
             display: display.to_string(),
         })
-    }
-}
-
-fn mouse_button_number(button: MouseButton) -> u8 {
-    match button {
-        MouseButton::Left => 1,
-        MouseButton::Middle => 2,
-        MouseButton::Right => 3,
     }
 }
 
@@ -127,31 +235,8 @@ impl InputDriver for XtestInput {
         task::spawn_blocking(move || {
             let (conn, screen) = x11::open_connection(&display)?;
             let root = x11::root_window(&conn, screen);
-            let x16 = x as i16;
-            let y16 = y as i16;
-            let btn = mouse_button_number(button);
-
-            conn.warp_pointer(x11rb::NONE, root, 0, 0, 0, 0, x16, y16)
-                .map_err(x11::xerr)?
-                .check()
-                .map_err(x11::xerr)?;
-
-            for i in 0..count.max(1) {
-                if i > 0 {
-                    thread::sleep(Duration::from_millis(50));
-                }
-                conn.xtest_fake_input(BUTTON_PRESS_EVENT, btn, 0, root, x16, y16, 0)
-                    .map_err(x11::xerr)?
-                    .check()
-                    .map_err(x11::xerr)?;
-                conn.xtest_fake_input(BUTTON_RELEASE_EVENT, btn, 0, root, x16, y16, 0)
-                    .map_err(x11::xerr)?
-                    .check()
-                    .map_err(x11::xerr)?;
-            }
-
-            deliver(&conn)?;
-            Ok(())
+            raw::click(&conn, root, x, y, button, count)?;
+            raw::deliver(&conn)
         })
         .await
         .map_err(|e| LxhError::ProcessSpawnFailed(e.to_string()))?
@@ -162,12 +247,7 @@ impl InputDriver for XtestInput {
         task::spawn_blocking(move || {
             let (conn, screen) = x11::open_connection(&display)?;
             let root = x11::root_window(&conn, screen);
-            conn.warp_pointer(x11rb::NONE, root, 0, 0, 0, 0, x as i16, y as i16)
-                .map_err(x11::xerr)?
-                .check()
-                .map_err(x11::xerr)?;
-            deliver(&conn)?;
-            Ok(())
+            raw::move_to(&conn, root, x, y)
         })
         .await
         .map_err(|e| LxhError::ProcessSpawnFailed(e.to_string()))?
@@ -178,28 +258,7 @@ impl InputDriver for XtestInput {
         task::spawn_blocking(move || {
             let (conn, screen) = x11::open_connection(&display)?;
             let root = x11::root_window(&conn, screen);
-
-            let click = |button: u8| -> Result<(), LxhError> {
-                conn.xtest_fake_input(BUTTON_PRESS_EVENT, button, 0, root, 0, 0, 0)
-                    .map_err(x11::xerr)?
-                    .check()
-                    .map_err(x11::xerr)?;
-                conn.xtest_fake_input(BUTTON_RELEASE_EVENT, button, 0, root, 0, 0, 0)
-                    .map_err(x11::xerr)?
-                    .check()
-                    .map_err(x11::xerr)?;
-                Ok(())
-            };
-
-            for _ in 0..dy.abs() {
-                click(if dy > 0 { 5 } else { 4 })?;
-            }
-            for _ in 0..dx.abs() {
-                click(if dx > 0 { 7 } else { 6 })?;
-            }
-
-            deliver(&conn)?;
-            Ok(())
+            raw::wheel(&conn, root, dx, dy)
         })
         .await
         .map_err(|e| LxhError::ProcessSpawnFailed(e.to_string()))?
@@ -211,25 +270,15 @@ impl InputDriver for XtestInput {
             let (conn, screen) = x11::open_connection(&display)?;
             let root = x11::root_window(&conn, screen);
 
-            conn.warp_pointer(x11rb::NONE, root, 0, 0, 0, 0, x1 as i16, y1 as i16)
-                .map_err(x11::xerr)?
-                .check()
-                .map_err(x11::xerr)?;
-            conn.xtest_fake_input(BUTTON_PRESS_EVENT, 1, 0, root, x1 as i16, y1 as i16, 0)
-                .map_err(x11::xerr)?
-                .check()
-                .map_err(x11::xerr)?;
+            raw::move_to(&conn, root, x1, y1)?;
+            raw::button(&conn, root, x1, y1, 1, true)?;
             conn.xtest_fake_input(MOTION_NOTIFY_EVENT, 0, 0, root, x2 as i16, y2 as i16, 0)
                 .map_err(x11::xerr)?
                 .check()
                 .map_err(x11::xerr)?;
-            conn.xtest_fake_input(BUTTON_RELEASE_EVENT, 1, 0, root, x2 as i16, y2 as i16, 0)
-                .map_err(x11::xerr)?
-                .check()
-                .map_err(x11::xerr)?;
+            raw::button(&conn, root, x2, y2, 1, false)?;
 
-            deliver(&conn)?;
-            Ok(())
+            raw::deliver(&conn)
         })
         .await
         .map_err(|e| LxhError::ProcessSpawnFailed(e.to_string()))?
@@ -240,32 +289,31 @@ impl InputDriver for XtestInput {
         let text = text.to_string();
         task::spawn_blocking(move || {
             let (conn, _) = x11::open_connection(&display)?;
-            let mapping = get_mapping(&conn)?;
+            let mapping = raw::get_mapping(&conn)?;
 
             for ch in text.chars() {
-                let keysym = keysym_for_char(ch).ok_or_else(|| {
+                let keysym = raw::keysym_for_char(ch).ok_or_else(|| {
                     LxhError::InvalidArgument(format!("unknown character: {}", ch))
                 })?;
                 let (keycode, needs_shift) =
-                    keycode_for_keysym(&mapping, keysym).ok_or_else(|| {
+                    raw::keycode_for_keysym(&mapping, keysym).ok_or_else(|| {
                         LxhError::InvalidArgument(format!("no keycode for keysym 0x{:x}", keysym))
                     })?;
 
                 if needs_shift {
-                    let (shift_kc, _) = keycode_for_keysym(&mapping, 0xffe1)
+                    let (shift_kc, _) = raw::keycode_for_keysym(&mapping, 0xffe1)
                         .ok_or_else(|| LxhError::InvalidArgument("no Shift keycode".into()))?;
-                    press(&conn, shift_kc, true)?;
-                    press(&conn, keycode, true)?;
-                    press(&conn, keycode, false)?;
-                    press(&conn, shift_kc, false)?;
+                    raw::press(&conn, shift_kc, true)?;
+                    raw::press(&conn, keycode, true)?;
+                    raw::press(&conn, keycode, false)?;
+                    raw::press(&conn, shift_kc, false)?;
                 } else {
-                    press(&conn, keycode, true)?;
-                    press(&conn, keycode, false)?;
+                    raw::press(&conn, keycode, true)?;
+                    raw::press(&conn, keycode, false)?;
                 }
             }
 
-            deliver(&conn)?;
-            Ok(())
+            raw::deliver(&conn)
         })
         .await
         .map_err(|e| LxhError::ProcessSpawnFailed(e.to_string()))?
@@ -277,19 +325,19 @@ impl InputDriver for XtestInput {
         let modifiers: Vec<String> = modifiers.iter().map(|s| s.to_string()).collect();
         task::spawn_blocking(move || {
             let (conn, _) = x11::open_connection(&display)?;
-            let mapping = get_mapping(&conn)?;
+            let mapping = raw::get_mapping(&conn)?;
 
-            let keysym = keysym_for_name(&key)
-                .or_else(|| keysym_for_char(key.chars().next().unwrap_or('\0')))
+            let keysym = raw::keysym_for_name(&key)
+                .or_else(|| raw::keysym_for_char(key.chars().next().unwrap_or('\0')))
                 .ok_or_else(|| LxhError::InvalidArgument(format!("unknown key: {}", key)))?;
-            let (keycode, _) = keycode_for_keysym(&mapping, keysym)
+            let (keycode, _) = raw::keycode_for_keysym(&mapping, keysym)
                 .ok_or_else(|| LxhError::InvalidArgument(format!("no keycode for key: {}", key)))?;
 
             let mut codes = Vec::new();
             for m in &modifiers {
-                let mk = keysym_for_name(m)
+                let mk = raw::keysym_for_name(m)
                     .ok_or_else(|| LxhError::InvalidArgument(format!("unknown modifier: {}", m)))?;
-                let (mkc, _) = keycode_for_keysym(&mapping, mk).ok_or_else(|| {
+                let (mkc, _) = raw::keycode_for_keysym(&mapping, mk).ok_or_else(|| {
                     LxhError::InvalidArgument(format!("no keycode for modifier: {}", m))
                 })?;
                 codes.push(mkc);
@@ -297,14 +345,13 @@ impl InputDriver for XtestInput {
             codes.push(keycode);
 
             for &code in &codes {
-                press(&conn, code, true)?;
+                raw::press(&conn, code, true)?;
             }
             for &code in codes.iter().rev() {
-                press(&conn, code, false)?;
+                raw::press(&conn, code, false)?;
             }
 
-            deliver(&conn)?;
-            Ok(())
+            raw::deliver(&conn)
         })
         .await
         .map_err(|e| LxhError::ProcessSpawnFailed(e.to_string()))?
@@ -325,18 +372,6 @@ impl InputDriver for XtestInput {
         .await
         .map_err(|e| LxhError::ProcessSpawnFailed(e.to_string()))?
     }
-}
-
-fn press(conn: &RustConnection, keycode: u8, down: bool) -> Result<(), LxhError> {
-    let event = if down {
-        KEY_PRESS_EVENT
-    } else {
-        KEY_RELEASE_EVENT
-    };
-    conn.xtest_fake_input(event, keycode, 0, x11rb::NONE, 0, 0, 0)
-        .map_err(x11::xerr)?
-        .check()
-        .map_err(x11::xerr)
 }
 
 pub struct X11WindowManager {
@@ -498,21 +533,22 @@ impl lxh_core::ClipboardDriver for ArboardClipboard {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
+    use super::raw;
+    use lxh_core::x11;
 
     #[test]
     fn keysym_lookup() {
-        assert!(keysym_for_name("Return").is_some());
-        assert!(keysym_for_name("Shift_L").is_some());
-        assert!(keysym_for_char('a').is_some());
+        assert!(raw::keysym_for_name("Return").is_some());
+        assert!(raw::keysym_for_name("Shift_L").is_some());
+        assert!(raw::keysym_for_char('a').is_some());
     }
 
     #[test]
     fn keycode_for_keysym_finds_slot_zero() {
         let (conn, _) = x11::open_connection(":0").expect("need local display");
-        let mapping = get_mapping(&conn).expect("keyboard mapping");
-        let keysym = keysym_for_name("a").unwrap();
-        let (code, shifted) = keycode_for_keysym(&mapping, keysym).unwrap();
+        let mapping = raw::get_mapping(&conn).expect("keyboard mapping");
+        let keysym = raw::keysym_for_name("a").unwrap();
+        let (code, shifted) = raw::keycode_for_keysym(&mapping, keysym).unwrap();
         assert!(code > 0);
         assert!(!shifted);
     }
@@ -520,9 +556,9 @@ mod tests {
     #[test]
     fn keycode_for_keysym_finds_shifted_slot() {
         let (conn, _) = x11::open_connection(":0").expect("need local display");
-        let mapping = get_mapping(&conn).expect("keyboard mapping");
-        let keysym = keysym_for_name("A").unwrap();
-        let (code, shifted) = keycode_for_keysym(&mapping, keysym).unwrap();
+        let mapping = raw::get_mapping(&conn).expect("keyboard mapping");
+        let keysym = raw::keysym_for_name("A").unwrap();
+        let (code, shifted) = raw::keycode_for_keysym(&mapping, keysym).unwrap();
         assert!(code > 0);
         assert!(shifted);
     }

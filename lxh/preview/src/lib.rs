@@ -14,10 +14,13 @@
 //! * [`x11`] — small X11 helpers shared by the above
 //!
 //! The preview is fully decoupled from the display lifecycle: closing a
-//! preview cell only stops that viewer, never the display.
+//! preview cell only stops that viewer, never the display. Double-clicking
+//! a cell opens the interactive expando ([`expando`]), which forwards mouse
+//! and keyboard input into the harness display.
 
 mod cell;
 mod container;
+mod expando;
 mod geometry;
 mod layout;
 mod panel;

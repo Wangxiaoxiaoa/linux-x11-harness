@@ -32,6 +32,9 @@ const REFRESH_INTERVAL: Duration = Duration::from_millis(100);
 const PUMP_INTERVAL: Duration = Duration::from_millis(20);
 /// Window opacity: ~70% opaque; needs a compositing WM.
 const OPACITY: u32 = 0xB3FFFFFF;
+/// Two clicks within this window (and this far apart) count as a double-click.
+const DOUBLE_CLICK_WINDOW: Duration = Duration::from_millis(400);
+const DOUBLE_CLICK_SLOP: i16 = 5;
 
 /// Title strip height and close-button width. Derived once per process from
 /// the screen metrics and passed to every cell.
@@ -41,13 +44,15 @@ pub(crate) struct CellChrome {
     pub btn_w: u16,
 }
 
-/// Events a cell reports back to the panel.
+/// Events a cell reports to the panel.
 #[derive(Debug)]
 pub(crate) enum CellEvent {
     /// The user clicked the close button.
     Closed { display_id: String },
     /// The target display's X connection broke.
     DisplayGone { display_id: String },
+    /// The user double-clicked the cell: open the interactive expando.
+    Expanded { display_id: String },
 }
 
 /// Geometry for one cell, relative to the container. Set by the panel.
@@ -165,6 +170,8 @@ struct Cell {
     rect: CellRect,
     chrome: CellChrome,
     hover: bool,
+    /// Last single click for double-click detection: (time, x, y).
+    last_click: Option<(Instant, i16, i16)>,
     /// Last map state actually applied to the X window.
     mapped_applied: bool,
     mailbox: Arc<CellMailbox>,
@@ -323,6 +330,7 @@ impl Cell {
             rect,
             chrome: *chrome,
             hover: false,
+            last_click: None,
             mapped_applied: true,
             mailbox: Arc::clone(mailbox),
             events: events.clone(),
@@ -395,10 +403,30 @@ impl Cell {
                         });
                         return false;
                     }
+                    if self.detect_double_click(event.event_x, event.event_y) {
+                        let _ = self.events.send(CellEvent::Expanded {
+                            display_id: self.display_id.clone(),
+                        });
+                    }
                 }
                 _ => {}
             }
         }
+    }
+
+    /// Two clicks in quick succession at (roughly) the same spot.
+    fn detect_double_click(&mut self, x: i16, y: i16) -> bool {
+        let now = Instant::now();
+        let double = match self.last_click {
+            Some((t, lx, ly)) => {
+                now.duration_since(t) <= DOUBLE_CLICK_WINDOW
+                    && (x - lx).abs() <= DOUBLE_CLICK_SLOP
+                    && (y - ly).abs() <= DOUBLE_CLICK_SLOP
+            }
+            None => false,
+        };
+        self.last_click = if double { None } else { Some((now, x, y)) };
+        double
     }
 
     fn render(&mut self) -> Result<(), CellRenderError> {
@@ -526,8 +554,15 @@ impl Cell {
     }
 }
 
-/// Scale a 24-bit ZPixmap (BGRA) to the target size.
-fn scale(bgra: &[u8], src_w: u32, src_h: u32, dst_w: u32, dst_h: u32) -> Option<Vec<u8>> {
+/// Scale a 24-bit ZPixmap (BGRA) to the target size. Shared with the
+/// expando, which renders the same captures at a larger window size.
+pub(crate) fn scale(
+    bgra: &[u8],
+    src_w: u32,
+    src_h: u32,
+    dst_w: u32,
+    dst_h: u32,
+) -> Option<Vec<u8>> {
     if src_w == dst_w && src_h == dst_h {
         return None;
     }
