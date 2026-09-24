@@ -181,6 +181,7 @@ async fn dispatch_tool_call(
         "lxh_zoom" => handlers::zoom(state, args).await,
         "lxh_hover" => handlers::hover(state, args).await,
         "lxh_capture_window" => handlers::screenshot_window(state, args).await,
+        "lxh_ocr" => handlers::ocr(state, args).await,
         "lxh_window_focus" => handlers::window_focus(state, args).await,
         "lxh_window_set_frame" => handlers::window_set_frame(state, args).await,
         "lxh_window_close" => handlers::window_close(state, args).await,

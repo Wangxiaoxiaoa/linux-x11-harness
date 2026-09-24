@@ -7,7 +7,7 @@ newline-delimited JSON-RPC 2.0 Unix socket.
 Usage:
     lxh.py <tool_name> [json_arguments]
     lxh.py lxh_display_create '{"persistent": true}'
-    lxh.py lxh_capture_screenshot '{"display_id": "d-..."}'
+    lxh.py lxh_capture_window '{"display_id": "d-...", "window_id": 123}'
 
 Prints the tool's result as JSON. Exit code 1 on transport or tool error.
 """

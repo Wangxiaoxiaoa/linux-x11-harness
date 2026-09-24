@@ -339,7 +339,7 @@ async fn tools_list_returns_all_tools() {
     let mut conn = daemon.connect().await;
     let resp = conn.call_method("tools/list", json!({})).await;
     let tools = resp["result"]["tools"].as_array().expect("tools array");
-    assert_eq!(tools.len(), 33, "expected 33 tools");
+    assert_eq!(tools.len(), 34, "expected 34 tools");
 
     for tool in tools {
         assert!(tool["name"].is_string(), "tool missing name: {tool}");

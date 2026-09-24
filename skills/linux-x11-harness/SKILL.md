@@ -58,6 +58,23 @@ agent's capability you use one of these transports:
   and prints the tool result as JSON. Never start your own Xvfb — always go
   through the daemon, or you lose isolation and the preview.
 
+## Reading screen text without vision
+
+If you cannot view images, or the app exposes no accessibility tree,
+read the screen with local OCR:
+
+```bash
+lxh_capture_window '{"display_id": "d-...", "window_id": 123,
+                     "save_to": "/tmp/shot.png"}'
+lxh_ocr '{"image_path": "/tmp/shot.png"}'
+```
+
+`save_to` makes the capture tools write the PNG and return its path
+instead of base64 data; `lxh_ocr` then returns the recognized text.
+`lxh_zoom` accepts the same `save_to` for reading small regions.
+OCR engines are probed in order: tesseract, then the python package
+rapidocr_onnxruntime.
+
 ## Lifecycle
 
 Always follow this order:

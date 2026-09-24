@@ -3,10 +3,10 @@ use std::sync::Arc;
 
 use crate::tools::{
     parse_args, tool_definitions as tools_tool_definitions, AppLaunchArgs, AppTerminateArgs,
-    ClickArgs, ClickElementArgs, ClipboardSetArgs, DesktopOverviewArgs, DisplayCreateArgs,
-    DisplayIdArgs, DragArgs, GetWindowStateArgs, HoverArgs, InvokeMenuArgs, KeyArgs,
-    ListUserWindowsArgs, MoveArgs, ScrollArgs, SetValueArgs, SetWindowFrameArgs, TypeArgs,
-    VerifyStateArgs, WaitArgs, WindowIdArgs, ZoomArgs,
+    CaptureWindowArgs, ClickArgs, ClickElementArgs, ClipboardSetArgs, DesktopOverviewArgs,
+    DisplayCreateArgs, DisplayIdArgs, DragArgs, GetWindowStateArgs, HoverArgs, InvokeMenuArgs,
+    KeyArgs, ListUserWindowsArgs, MoveArgs, OcrArgs, ScrollArgs, SetValueArgs, SetWindowFrameArgs,
+    TypeArgs, VerifyStateArgs, WaitArgs, WindowIdArgs, ZoomArgs,
 };
 use lxh_core::{
     Driver, ElementExpectation, LxhError, MouseButton, StateExpectation, WindowExpectation,
@@ -16,6 +16,7 @@ use lxh_preview::PreviewPanel;
 use lxh_runtime::{Display, DisplayConfig, Runtime};
 use serde_json::{json, Value};
 use tokio::sync::{Mutex, RwLock};
+use tokio::task;
 
 pub struct DaemonState {
     pub runtime: Arc<Runtime>,
@@ -273,10 +274,21 @@ pub async fn get_cursor_position(state: &DaemonState, args: &Value) -> Result<Va
 }
 
 pub async fn screenshot_window(state: &DaemonState, args: &Value) -> Result<Value, LxhError> {
-    let args: WindowIdArgs = parse_args(args)?;
+    let args: CaptureWindowArgs = parse_args(args)?;
     let driver = find_driver(state, &args.display_id).await?;
     let shot = driver.screenshot_window(args.window_id as u32).await?;
+    if let Some(path) = &args.save_to {
+        let bytes = save_png(&shot.data, path)?;
+        return Ok(json!({ "saved_to": path, "bytes": bytes }));
+    }
     Ok(json!({ "mimeType": "image/png", "data": encode_png(&shot.data) }))
+}
+
+/// Persist a PNG and return its size in bytes.
+fn save_png(data: &[u8], path: &str) -> Result<usize, LxhError> {
+    std::fs::write(path, data)
+        .map(|_| data.len())
+        .map_err(|e| LxhError::InvalidArgument(format!("cannot write {}: {e}", path)))
 }
 
 pub async fn zoom(state: &DaemonState, args: &Value) -> Result<Value, LxhError> {
@@ -296,6 +308,18 @@ pub async fn zoom(state: &DaemonState, args: &Value) -> Result<Value, LxhError> 
         },
     );
 
+    if let Some(path) = &args.save_to {
+        let bytes = save_png(&capture.screenshot.data, path)?;
+        return Ok(json!({
+            "saved_to": path,
+            "bytes": bytes,
+            "zoom": {
+                "display_origin": { "x": capture.display_x, "y": capture.display_y },
+                "scale": scale,
+            }
+        }));
+    }
+
     Ok(json!({
         "mimeType": "image/png",
         "data": encode_png(&capture.screenshot.data),
@@ -303,6 +327,103 @@ pub async fn zoom(state: &DaemonState, args: &Value) -> Result<Value, LxhError> 
             "display_origin": { "x": capture.display_x, "y": capture.display_y },
             "scale": scale,
         }
+    }))
+}
+
+/// Local OCR engines, probed in order of preference.
+enum OcrEngine {
+    /// `tesseract <img> stdout -l <lang>`.
+    Tesseract,
+    /// `python3 -c "from rapidocr_onnxruntime import RapidOCR ..."`.
+    RapidOcr,
+}
+
+fn detect_ocr_engine() -> Option<OcrEngine> {
+    if which_exists("tesseract") {
+        return Some(OcrEngine::Tesseract);
+    }
+    if which_exists("python3")
+        && std::process::Command::new("python3")
+            .args(["-c", "import rapidocr_onnxruntime"])
+            .output()
+            .is_ok_and(|o| o.status.success())
+    {
+        return Some(OcrEngine::RapidOcr);
+    }
+    None
+}
+
+fn which_exists(cmd: &str) -> bool {
+    std::process::Command::new("which")
+        .arg(cmd)
+        .output()
+        .is_ok_and(|o| o.status.success())
+}
+
+pub async fn ocr(_state: &DaemonState, args: &Value) -> Result<Value, LxhError> {
+    let args: OcrArgs = parse_args(args)?;
+    if !std::path::Path::new(&args.image_path).exists() {
+        return Err(LxhError::InvalidArgument(format!(
+            "image not found: {}",
+            args.image_path
+        )));
+    }
+    let engine = detect_ocr_engine().ok_or_else(|| {
+        LxhError::InvalidArgument(
+            "no OCR engine available; install tesseract (tesseract-ocr \
+             tesseract-ocr-chi-sim tesseract-ocr-eng) or the python package \
+             rapidocr_onnxruntime"
+                .into(),
+        )
+    })?;
+
+    let text = task::spawn_blocking(move || match engine {
+        OcrEngine::Tesseract => {
+            let lang = args.lang.clone().unwrap_or_else(|| "chi_sim+eng".into());
+            std::process::Command::new("tesseract")
+                .args([&args.image_path, "stdout", "-l", &lang])
+                .output()
+                .map_err(|e| LxhError::InvalidArgument(format!("tesseract failed: {e}")))
+                .and_then(|o| {
+                    if o.status.success() {
+                        Ok(String::from_utf8_lossy(&o.stdout).into_owned())
+                    } else {
+                        Err(LxhError::InvalidArgument(format!(
+                            "tesseract error: {}",
+                            String::from_utf8_lossy(&o.stderr).trim()
+                        )))
+                    }
+                })
+        }
+        OcrEngine::RapidOcr => {
+            let script = format!(
+                "from rapidocr_onnxruntime import RapidOCR;\
+                 r=RapidOCR(); res,_=r({:?});\
+                 print('\\n'.join(x[1] for x in res) if res else '', end='')",
+                args.image_path
+            );
+            std::process::Command::new("python3")
+                .args(["-c", &script])
+                .output()
+                .map_err(|e| LxhError::InvalidArgument(format!("rapidocr failed: {e}")))
+                .and_then(|o| {
+                    if o.status.success() {
+                        Ok(String::from_utf8_lossy(&o.stdout).into_owned())
+                    } else {
+                        Err(LxhError::InvalidArgument(format!(
+                            "rapidocr error: {}",
+                            String::from_utf8_lossy(&o.stderr).trim()
+                        )))
+                    }
+                })
+        }
+    })
+    .await
+    .map_err(|e| LxhError::ProcessSpawnFailed(e.to_string()))??;
+
+    Ok(json!({
+        "text": text.trim(),
+        "chars": text.trim().chars().count(),
     }))
 }
 

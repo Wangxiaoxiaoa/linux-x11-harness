@@ -115,6 +115,20 @@ pub struct ZoomArgs {
     pub y1: f64,
     pub x2: f64,
     pub y2: f64,
+    /// Save the PNG to this path and return the file path instead of base64
+    /// data. Use with lxh_ocr when the model cannot view images.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub save_to: Option<String>,
+}
+
+#[derive(Debug, Deserialize, JsonSchema)]
+pub struct OcrArgs {
+    /// Path of the image to read (e.g. saved by lxh_capture_window with
+    /// `save_to`).
+    pub image_path: String,
+    /// Language hint for the engine (tesseract: e.g. "chi_sim+eng").
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub lang: Option<String>,
 }
 
 #[derive(Debug, Deserialize, JsonSchema)]
@@ -208,6 +222,16 @@ pub struct DragArgs {
 pub struct WindowIdArgs {
     pub display_id: String,
     pub window_id: u64,
+}
+
+#[derive(Debug, Deserialize, JsonSchema)]
+pub struct CaptureWindowArgs {
+    pub display_id: String,
+    pub window_id: u64,
+    /// Save the PNG to this path and return the file path instead of base64
+    /// data. Use with lxh_ocr when the model cannot view images.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub save_to: Option<String>,
 }
 
 #[derive(Debug, Deserialize, JsonSchema)]
@@ -308,6 +332,7 @@ fn annotations_for(name: &str) -> Value {
             | "lxh_get_desktop_overview"
             | "lxh_get_window_state"
             | "lxh_capture_window"
+            | "lxh_ocr"
             | "lxh_zoom"
             | "lxh_clipboard_get"
             | "lxh_input_get_cursor_position"
@@ -326,6 +351,7 @@ fn annotations_for(name: &str) -> Value {
             | "lxh_get_desktop_overview"
             | "lxh_get_window_state"
             | "lxh_capture_window"
+            | "lxh_ocr"
             | "lxh_zoom"
             | "lxh_clipboard_get"
             | "lxh_clipboard_set"
@@ -451,8 +477,19 @@ pub fn tool_definitions() -> Vec<Value> {
         ),
         tool_def(
             "lxh_capture_window",
-            "Take a screenshot of a specific window",
-            root_schema::<WindowIdArgs>(),
+            "Take a screenshot of a specific window as PNG. By default returns \
+             base64 data; with `save_to` writes the file instead and returns \
+             its path — pair with lxh_ocr when the model cannot view images.",
+            root_schema::<CaptureWindowArgs>(),
+        ),
+        tool_def(
+            "lxh_ocr",
+            "Read text from an image file with a local OCR engine (tesseract, \
+             else rapidocr). Pair with lxh_capture_window/lxh_zoom `save_to` to \
+             read screen text when the model has no vision or the app exposes \
+             no accessibility tree. Returns the recognized text and the engine \
+             used.",
+            root_schema::<OcrArgs>(),
         ),
         tool_def(
             "lxh_list_apps",
@@ -571,7 +608,7 @@ mod tests {
     #[test]
     fn tool_definitions_has_expected_tools() {
         let defs = tool_definitions();
-        assert_eq!(defs.len(), 33, "expected 33 tool definitions");
+        assert_eq!(defs.len(), 34, "expected 34 tool definitions");
 
         let names: Vec<&str> = defs.iter().map(|d| d["name"].as_str().unwrap()).collect();
         assert!(names.contains(&"lxh_display_create"));
