@@ -344,7 +344,13 @@ pub fn tool_definitions() -> Vec<Value> {
     vec![
         tool_def(
             "lxh_display_create",
-            "Create a new X11 display. Set persistent to keep it after disconnect.",
+            "Create an isolated X11 display with a live preview panel on the \
+             user's desktop. Routing rule for GUI app requests: first check \
+             with `pgrep -x <app>` / `wmctrl -l` — if the app already runs on \
+             the user's desktop (:0), focus it with `wmctrl -a` instead of \
+             calling this; if it does NOT run there, ALWAYS open it through \
+             this tool plus lxh_app_launch, never by shell-launching GUI apps \
+             on the user's desktop.",
             root_schema::<DisplayCreateArgs>(),
         ),
         tool_def(
@@ -364,7 +370,10 @@ pub fn tool_definitions() -> Vec<Value> {
         ),
         tool_def(
             "lxh_app_launch",
-            "Launch an application on a display",
+            "Launch a GUI app inside a harness display (created with \
+             lxh_display_create). Never launch GUI apps with shell commands \
+             on the user's desktop — GUI app requests go through this tool \
+             so they run in the sandbox with a live preview.",
             root_schema::<AppLaunchArgs>(),
         ),
         tool_def(

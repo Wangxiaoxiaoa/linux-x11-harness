@@ -18,29 +18,28 @@ Use this skill when you need to control Linux GUI applications without touching 
 - Discover installed/running apps and invoke their menus by path.
 - Assert UI state after actions without reading screenshots manually.
 
-## When NOT to use
+## Decision flow for any GUI app request
 
-Before calling any `lxh_*` tool, check if the requested app is already
-running on the user's default display (`:0`):
+Before touching any GUI app, check whether it already runs on the user's
+default display (`:0`):
 
 ```bash
 pgrep -x chromium        # is the process running?
 wmctrl -l                # list windows on the user's desktop
 ```
 
-- **App already open on the user's desktop** → do NOT create an isolated
-  display. Use `wmctrl -a <title>` to focus it, or interact with it
-  directly via shell. The user probably just wants you to use the app
-  they already have open.
-- **App not running, user says "open X"** → still ask: does the user
-  want to see it on their desktop, or do they want you to automate it?
-  If they just want to see it, launch it on `:0` with shell commands.
-- **User says "automate", "test", "control remotely", "in a sandbox",
-  or the task requires repeated programmatic interaction** → use this
-  skill to create an isolated display.
+- **App already open on the user's desktop** → do NOT create a display.
+  Focus it with `wmctrl -a <title>` and interact via shell.
+- **App NOT running** → use this skill: `lxh_display_create` +
+  `lxh_app_launch`. NEVER launch GUI apps with shell commands on the
+  user's desktop — a fresh GUI app request always goes through a harness
+  display, so the agent gets a live preview and safe automation surface.
+- **User says "automate", "test", "in a sandbox", "don't touch my
+  desktop", or the task needs repeated programmatic interaction** →
+  always use this skill, even if the app happens to run on `:0`.
 
-In short: this skill is for **agent-driven GUI automation in isolation**,
-not for simply opening apps on the user's desktop.
+Shell commands are for non-GUI work (files, processes, curl) and for
+focusing existing windows — never for launching GUI apps.
 
 ## How to call the tools
 
