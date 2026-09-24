@@ -80,6 +80,10 @@ impl CaptureDriver for DefaultDriver {
         self.capture.screenshot_window(window_id).await
     }
 
+    async fn capture_at_cursor(&self) -> Result<(u32, Screenshot), LxhError> {
+        self.capture.capture_at_cursor().await
+    }
+
     async fn capture_region(
         &self,
         window_id: u32,

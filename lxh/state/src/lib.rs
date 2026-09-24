@@ -55,6 +55,64 @@ impl CaptureDriver for X11Capture {
         .map_err(|e| LxhError::ProcessSpawnFailed(e.to_string()))?
     }
 
+    async fn capture_at_cursor(&self) -> Result<(u32, Screenshot), LxhError> {
+        let display = self.display.clone();
+        task::spawn_blocking(move || {
+            let (conn, screen) = x11::open_connection(&display)?;
+            let root = conn.setup().roots[screen].root;
+            let reply = conn
+                .query_pointer(root)
+                .map_err(x11::xerr)?
+                .reply()
+                .map_err(x11::xerr)?;
+            let (cx, cy) = (reply.root_x as i32, reply.root_y as i32);
+
+            // Find the top-level window under the cursor.
+            let tree = conn
+                .query_tree(root)
+                .map_err(x11::xerr)?
+                .reply()
+                .map_err(x11::xerr)?;
+            let mut win = root;
+            for &candidate in &tree.children {
+                let geom = conn
+                    .get_geometry(candidate)
+                    .map_err(x11::xerr)?
+                    .reply()
+                    .map_err(x11::xerr)?;
+                let translated = conn
+                    .translate_coordinates(candidate, root, 0, 0)
+                    .map_err(x11::xerr)?
+                    .reply()
+                    .map_err(x11::xerr)?;
+                let (wx, wy) = (translated.dst_x as i32, translated.dst_y as i32);
+                if cx >= wx
+                    && cx < wx + geom.width as i32
+                    && cy >= wy
+                    && cy < wy + geom.height as i32
+                {
+                    win = candidate;
+                    break;
+                }
+            }
+            if win == root {
+                let w = conn.setup().roots[screen].width_in_pixels;
+                let h = conn.setup().roots[screen].height_in_pixels;
+                let shot = capture_rect(&conn, root, 0, 0, w, h)?;
+                return Ok((0, shot));
+            }
+            let geom = conn
+                .get_geometry(win)
+                .map_err(x11::xerr)?
+                .reply()
+                .map_err(x11::xerr)?;
+            let shot = capture_rect(&conn, win, 0, 0, geom.width, geom.height)?;
+            Ok((win, shot))
+        })
+        .await
+        .map_err(|e| LxhError::ProcessSpawnFailed(e.to_string()))?
+    }
+
     async fn capture_region(
         &self,
         window_id: u32,

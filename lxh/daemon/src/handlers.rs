@@ -4,8 +4,9 @@ use std::sync::Arc;
 use crate::tools::{
     parse_args, tool_definitions as tools_tool_definitions, AppLaunchArgs, AppTerminateArgs,
     ClickArgs, ClickElementArgs, ClipboardSetArgs, DesktopOverviewArgs, DisplayCreateArgs,
-    DisplayIdArgs, DragArgs, GetWindowStateArgs, InvokeMenuArgs, KeyArgs, MoveArgs, ScrollArgs,
-    SetValueArgs, SetWindowFrameArgs, TypeArgs, VerifyStateArgs, WaitArgs, WindowIdArgs, ZoomArgs,
+    DisplayIdArgs, DragArgs, GetWindowStateArgs, HoverArgs, InvokeMenuArgs, KeyArgs, MoveArgs,
+    ScrollArgs, SetValueArgs, SetWindowFrameArgs, TypeArgs, VerifyStateArgs, WaitArgs,
+    WindowIdArgs, ZoomArgs,
 };
 use lxh_core::{
     Driver, ElementExpectation, LxhError, MouseButton, StateExpectation, WindowExpectation,
@@ -271,13 +272,6 @@ pub async fn get_cursor_position(state: &DaemonState, args: &Value) -> Result<Va
     Ok(json!({ "x": x, "y": y }))
 }
 
-pub async fn screenshot(state: &DaemonState, args: &Value) -> Result<Value, LxhError> {
-    let args: DisplayIdArgs = parse_args(args)?;
-    let driver = find_driver(state, &args.display_id).await?;
-    let shot = driver.screenshot().await?;
-    Ok(json!({ "mimeType": "image/png", "data": encode_png(&shot.data) }))
-}
-
 pub async fn screenshot_window(state: &DaemonState, args: &Value) -> Result<Value, LxhError> {
     let args: WindowIdArgs = parse_args(args)?;
     let driver = find_driver(state, &args.display_id).await?;
@@ -387,6 +381,29 @@ pub async fn verify_state(state: &DaemonState, args: &Value) -> Result<Value, Lx
         .map(|(satisfied, observed)| json!({ "satisfied": satisfied, "observed": observed }))
         .collect();
     Ok(json!({ "status": result.status, "results": results }))
+}
+
+pub async fn hover(state: &DaemonState, args: &Value) -> Result<Value, LxhError> {
+    let args: HoverArgs = parse_args(args)?;
+    let driver = find_driver(state, &args.display_id).await?;
+    let duration = std::time::Duration::from_millis(args.duration_ms.unwrap_or(1500));
+
+    // Move mouse to the target position.
+    driver.move_mouse(args.x as i32, args.y as i32).await?;
+
+    // Hold: give tooltip time to appear.
+    tokio::time::sleep(duration).await;
+
+    // Capture the window under the cursor (or full display if on desktop).
+    let (window_id, capture) = driver.capture_at_cursor().await?;
+    let capture_type = if window_id > 0 { "window" } else { "full" };
+
+    Ok(json!({
+        "mimeType": "image/png",
+        "data": encode_png(&capture.data),
+        "cursor": { "x": args.x, "y": args.y },
+        "capture": capture_type,
+    }))
 }
 
 pub async fn window_focus(state: &DaemonState, args: &Value) -> Result<Value, LxhError> {

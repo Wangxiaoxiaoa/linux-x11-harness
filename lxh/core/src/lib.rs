@@ -159,6 +159,9 @@ pub trait InputDriver: Send + Sync {
 pub trait CaptureDriver: Send + Sync {
     async fn screenshot(&self) -> Result<Screenshot, LxhError>;
     async fn screenshot_window(&self, window_id: u32) -> Result<Screenshot, LxhError>;
+    /// Capture the window under the cursor (or the full display). Returns
+    /// (window_id, screenshot); window_id is 0 for full display.
+    async fn capture_at_cursor(&self) -> Result<(u32, Screenshot), LxhError>;
     /// Capture a window region (window coordinates, padded by 20% and
     /// clamped to the window), scaled so the output is at most 500 px wide.
     async fn capture_region(

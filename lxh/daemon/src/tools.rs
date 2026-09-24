@@ -90,6 +90,16 @@ pub struct VerifyStateArgs {
 }
 
 #[derive(Debug, Deserialize, JsonSchema)]
+pub struct HoverArgs {
+    pub display_id: String,
+    pub x: f64,
+    pub y: f64,
+    /// How long to hold the mouse at (x, y). Default 1500 ms.
+    #[serde(default)]
+    pub duration_ms: Option<u64>,
+}
+
+#[derive(Debug, Deserialize, JsonSchema)]
 pub struct ZoomArgs {
     pub display_id: String,
     pub window_id: u64,
@@ -289,7 +299,6 @@ fn annotations_for(name: &str) -> Value {
             | "lxh_list_apps"
             | "lxh_get_desktop_overview"
             | "lxh_get_window_state"
-            | "lxh_capture_screenshot"
             | "lxh_capture_window"
             | "lxh_zoom"
             | "lxh_clipboard_get"
@@ -307,7 +316,6 @@ fn annotations_for(name: &str) -> Value {
             | "lxh_list_apps"
             | "lxh_get_desktop_overview"
             | "lxh_get_window_state"
-            | "lxh_capture_screenshot"
             | "lxh_capture_window"
             | "lxh_zoom"
             | "lxh_clipboard_get"
@@ -401,9 +409,12 @@ pub fn tool_definitions() -> Vec<Value> {
             root_schema::<DisplayIdArgs>(),
         ),
         tool_def(
-            "lxh_capture_screenshot",
-            "Take a screenshot",
-            root_schema::<DisplayIdArgs>(),
+            "lxh_hover",
+            "Move the mouse to (x, y), hold for duration_ms (default 1500 ms), then return \
+             a screenshot of the window under the cursor (or the full display if the \
+             cursor is on the desktop). Use this to reveal tooltips, hover states, or \
+             context hints when the next action is unclear.",
+            root_schema::<HoverArgs>(),
         ),
         tool_def(
             "lxh_zoom",
@@ -529,7 +540,6 @@ mod tests {
         assert!(names.contains(&"lxh_invoke_menu"));
         assert!(names.contains(&"lxh_verify_state"));
         assert!(names.contains(&"lxh_input_click"));
-        assert!(names.contains(&"lxh_capture_screenshot"));
         assert!(names.contains(&"lxh_clipboard_get"));
         assert!(names.contains(&"lxh_window_set_frame"));
         assert!(names.contains(&"lxh_preview_open"));

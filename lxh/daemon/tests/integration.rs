@@ -436,10 +436,30 @@ async fn launch_app_and_take_screenshot() {
         launch
     );
 
-    tokio::time::sleep(Duration::from_millis(500)).await;
+    // Wait for openbox to map the window and update _NET_CLIENT_LIST_STACKING.
+    let mut app_window_id: Option<u64> = None;
+    for _ in 0..20 {
+        tokio::time::sleep(Duration::from_millis(250)).await;
+        let overview = conn
+            .call_tool(
+                "lxh_get_desktop_overview",
+                json!({"display_id": display_id}),
+            )
+            .await;
+        if let Some(windows) = overview["result"]["windows"].as_array() {
+            if let Some(w) = windows.first() {
+                app_window_id = w["window_id"].as_u64();
+                break;
+            }
+        }
+    }
+    let app_window_id = app_window_id.expect("at least one window should exist");
 
     let shot = conn
-        .call_tool("lxh_capture_screenshot", json!({"display_id": display_id}))
+        .call_tool(
+            "lxh_capture_window",
+            json!({"display_id": display_id, "window_id": app_window_id}),
+        )
         .await;
     assert!(!shot["result"]["data"].as_str().unwrap().is_empty());
 
@@ -554,8 +574,8 @@ async fn invalid_display_id_returns_error() {
     let mut conn = daemon.connect().await;
     let resp = conn
         .call_tool(
-            "lxh_capture_screenshot",
-            json!({"display_id": "d-doesnotexist"}),
+            "lxh_capture_window",
+            json!({"display_id": "d-doesnotexist", "window_id": 0}),
         )
         .await;
     assert!(resp["error"].is_object(), "expected error response: {resp}");
