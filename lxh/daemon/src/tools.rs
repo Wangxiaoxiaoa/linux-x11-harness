@@ -387,7 +387,13 @@ pub fn tool_definitions() -> Vec<Value> {
             "Move the mouse cursor",
             root_schema::<MoveArgs>(),
         ),
-        tool_def("lxh_input_type", "Type text", root_schema::<TypeArgs>()),
+        tool_def(
+            "lxh_input_type",
+            "Type text via XTEST. Accepts optional pid: when the focused widget is not \
+             editable after XTEST delivery, the text is written through the pid's \
+             AT-SPI tree instead of vanishing.",
+            root_schema::<TypeArgs>(),
+        ),
         tool_def(
             "lxh_input_key",
             "Press a key or key combination",
@@ -463,12 +469,18 @@ pub fn tool_definitions() -> Vec<Value> {
         ),
         tool_def(
             "lxh_set_value",
-            "Set the value of an AT-SPI editable element",
+            "Set the value of an AT-SPI editable element. Accepts optional identity \
+             (from a previous lxh_get_window_state) for drift-proof targeting. \
+             Uses EditableText.SetTextContents with a clear-then-insert fallback. \
+             Never raises the toplevel (background contract).",
             root_schema::<SetValueArgs>(),
         ),
         tool_def(
             "lxh_click_element",
-            "Click an AT-SPI element by pid and index",
+            "Activate an AT-SPI element by pid and index. Accepts optional identity \
+             (from a previous lxh_get_window_state) for drift-proof targeting. \
+             Left-click uses AT-SPI doAction (focus-free, works on background \
+             windows); passive elements return suspected_noop.",
             root_schema::<ClickElementArgs>(),
         ),
         tool_def(
