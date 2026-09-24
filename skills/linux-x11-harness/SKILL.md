@@ -21,12 +21,8 @@ Use this skill when you need to control Linux GUI applications without touching 
 ## Decision flow for any GUI app request
 
 Before touching any GUI app, check whether it already runs on the user's
-default display (`:0`):
-
-```bash
-pgrep -x chromium        # is the process running?
-wmctrl -l                # list windows on the user's desktop
-```
+default display (`:0`) with `lxh_list_user_windows` (optionally filtered
+by `name`):
 
 - **App already open on the user's desktop** → do NOT create a display.
   Focus it with `wmctrl -a <title>` and interact via shell.

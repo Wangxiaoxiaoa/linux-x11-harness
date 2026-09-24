@@ -4,9 +4,9 @@ use std::sync::Arc;
 use crate::tools::{
     parse_args, tool_definitions as tools_tool_definitions, AppLaunchArgs, AppTerminateArgs,
     ClickArgs, ClickElementArgs, ClipboardSetArgs, DesktopOverviewArgs, DisplayCreateArgs,
-    DisplayIdArgs, DragArgs, GetWindowStateArgs, HoverArgs, InvokeMenuArgs, KeyArgs, MoveArgs,
-    ScrollArgs, SetValueArgs, SetWindowFrameArgs, TypeArgs, VerifyStateArgs, WaitArgs,
-    WindowIdArgs, ZoomArgs,
+    DisplayIdArgs, DragArgs, GetWindowStateArgs, HoverArgs, InvokeMenuArgs, KeyArgs,
+    ListUserWindowsArgs, MoveArgs, ScrollArgs, SetValueArgs, SetWindowFrameArgs, TypeArgs,
+    VerifyStateArgs, WaitArgs, WindowIdArgs, ZoomArgs,
 };
 use lxh_core::{
     Driver, ElementExpectation, LxhError, MouseButton, StateExpectation, WindowExpectation,
@@ -549,6 +549,25 @@ pub async fn get_window_state(state: &DaemonState, args: &Value) -> Result<Value
     }
 
     Ok(result)
+}
+
+pub async fn list_user_windows(_state: &DaemonState, args: &Value) -> Result<Value, LxhError> {
+    let args: ListUserWindowsArgs = parse_args(args)?;
+    let windows = lxh_state::list_user_windows(args.name).await?;
+    let nodes: Vec<Value> = windows
+        .iter()
+        .map(|w| {
+            let mut node = json!({ "pid": w.pid, "process": w.process });
+            if let Some(t) = &w.title {
+                node["title"] = json!(t);
+            }
+            if let Some(b) = &w.bounds {
+                node["bounds"] = json!({ "x": b.x, "y": b.y, "w": b.w, "h": b.h });
+            }
+            node
+        })
+        .collect();
+    Ok(json!({ "windows": nodes, "count": nodes.len() }))
 }
 
 pub fn list_apps() -> Value {

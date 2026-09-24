@@ -38,6 +38,13 @@ pub struct DesktopOverviewArgs {
 }
 
 #[derive(Debug, Deserialize, JsonSchema)]
+pub struct ListUserWindowsArgs {
+    /// Case-insensitive substring filter on process name or window title.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub name: Option<String>,
+}
+
+#[derive(Debug, Deserialize, JsonSchema)]
 pub struct ListAppsArgs {}
 
 #[derive(Debug, Deserialize, JsonSchema)]
@@ -297,6 +304,7 @@ fn annotations_for(name: &str) -> Value {
         name,
         "lxh_display_info"
             | "lxh_list_apps"
+            | "lxh_list_user_windows"
             | "lxh_get_desktop_overview"
             | "lxh_get_window_state"
             | "lxh_capture_window"
@@ -314,6 +322,7 @@ fn annotations_for(name: &str) -> Value {
         name,
         "lxh_display_info"
             | "lxh_list_apps"
+            | "lxh_list_user_windows"
             | "lxh_get_desktop_overview"
             | "lxh_get_window_state"
             | "lxh_capture_window"
@@ -345,12 +354,12 @@ pub fn tool_definitions() -> Vec<Value> {
         tool_def(
             "lxh_display_create",
             "Create an isolated X11 display with a live preview panel on the \
-             user's desktop. Routing rule for GUI app requests: first check \
-             with `pgrep -x <app>` / `wmctrl -l` — if the app already runs on \
-             the user's desktop (:0), focus it with `wmctrl -a` instead of \
-             calling this; if it does NOT run there, ALWAYS open it through \
-             this tool plus lxh_app_launch, never by shell-launching GUI apps \
-             on the user's desktop.",
+             user's desktop. Routing rule for GUI app requests: first call \
+             lxh_list_user_windows — if the app already runs on the user's \
+             desktop (:0), focus it with `wmctrl -a` instead of calling this; \
+             if it does NOT run there, ALWAYS open it through this tool plus \
+             lxh_app_launch, never by shell-launching GUI apps on the user's \
+             desktop.",
             root_schema::<DisplayCreateArgs>(),
         ),
         tool_def(
@@ -477,6 +486,16 @@ pub fn tool_definitions() -> Vec<Value> {
             root_schema::<DesktopOverviewArgs>(),
         ),
         tool_def(
+            "lxh_list_user_windows",
+            "List GUI windows currently running on the user's default desktop (:0) with \
+             pid, process name, title and geometry. Routing rule: call this BEFORE \
+             lxh_display_create for any GUI app request — if the app already runs on \
+             the user's desktop, focus it with `wmctrl -a` instead of creating a display; \
+             if it does not, create a harness display and launch it there. Optional \
+             `name` filters by process-name or title substring (case-insensitive).",
+            root_schema::<ListUserWindowsArgs>(),
+        ),
+        tool_def(
             "lxh_set_value",
             "Set the value of an AT-SPI editable element. Accepts optional identity \
              (from a previous lxh_get_window_state) for drift-proof targeting. \
@@ -552,11 +571,12 @@ mod tests {
     #[test]
     fn tool_definitions_has_expected_tools() {
         let defs = tool_definitions();
-        assert_eq!(defs.len(), 32, "expected 32 tool definitions");
+        assert_eq!(defs.len(), 33, "expected 33 tool definitions");
 
         let names: Vec<&str> = defs.iter().map(|d| d["name"].as_str().unwrap()).collect();
         assert!(names.contains(&"lxh_display_create"));
         assert!(names.contains(&"lxh_list_apps"));
+        assert!(names.contains(&"lxh_list_user_windows"));
         assert!(names.contains(&"lxh_zoom"));
         assert!(names.contains(&"lxh_invoke_menu"));
         assert!(names.contains(&"lxh_verify_state"));

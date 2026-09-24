@@ -196,6 +196,7 @@ async fn dispatch_tool_call(
         "lxh_get_window_state" => handlers::get_window_state(state, args).await,
         "lxh_list_apps" => Ok(handlers::list_apps()),
         "lxh_get_desktop_overview" => handlers::get_desktop_overview(state, args).await,
+        "lxh_list_user_windows" => handlers::list_user_windows(state, args).await,
         "lxh_set_value" => handlers::set_value(state, args).await,
         _ => Err(LxhError::InvalidArgument(format!("unknown tool: {name}"))),
     }

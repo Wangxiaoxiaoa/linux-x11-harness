@@ -12,6 +12,15 @@ use x11rb::rust_connection::RustConnection;
 pub mod a11y;
 pub mod atspi;
 
+/// One window on the user's default desktop, as reported by
+/// [`list_user_windows`].
+pub struct UserWindow {
+    pub pid: u32,
+    pub process: String,
+    pub title: Option<String>,
+    pub bounds: Option<lxh_core::Bounds>,
+}
+
 pub struct X11Capture {
     display: String,
 }
@@ -356,20 +365,7 @@ impl A11yDriver for AtspiA11y {
                 // Display-absolute geometry (client geometry is relative to
                 // the WM frame). A window that is going away mid-enumeration
                 // loses its bounds but must not abort the listing.
-                let translated = conn
-                    .translate_coordinates(window, root, 0, 0)
-                    .ok()
-                    .and_then(|c| c.reply().ok());
-                let geom = conn.get_geometry(window).ok().and_then(|c| c.reply().ok());
-                let bounds = match (translated, geom) {
-                    (Some(t), Some(g)) => Some(Bounds {
-                        x: t.dst_x as i32,
-                        y: t.dst_y as i32,
-                        w: g.width as u32,
-                        h: g.height as u32,
-                    }),
-                    _ => None,
-                };
+                let bounds = window_bounds(&conn, root, window);
 
                 windows.push(WindowEntry {
                     id: window,
@@ -653,6 +649,70 @@ fn list_processes() -> Vec<ProcessEntry> {
     }
     processes.sort_by_key(|p| p.pid);
     processes
+}
+
+/// Windows on the user's default desktop (`$DISPLAY`, normally `:0`).
+///
+/// The routing rule embedded in the tool descriptions needs a structured
+/// answer to "is this app already running on the user's desktop?"; this
+/// is that answer. Zombie windows (their process is gone) are filtered,
+/// and an optional case-insensitive `filter` matches process name or
+/// window title substrings.
+pub async fn list_user_windows(filter: Option<String>) -> Result<Vec<UserWindow>, LxhError> {
+    task::spawn_blocking(move || {
+        let display = std::env::var("DISPLAY").unwrap_or_else(|_| ":0".to_string());
+        let (conn, screen) = x11::open_connection(&display)?;
+        let root = conn.setup().roots[screen].root;
+        let processes = list_processes();
+
+        let filter = filter.map(|f| f.to_lowercase());
+        let mut out = Vec::new();
+        for (window, pid, title) in managed_windows(&conn, root)? {
+            let Some(pid) = pid else { continue };
+            // Dead-process windows keep living in X11; never report them.
+            let Some(process) = processes.iter().find(|p| p.pid == pid) else {
+                continue;
+            };
+            let title = if title.is_empty() { None } else { Some(title) };
+            if let Some(f) = &filter {
+                let in_process = process.name.to_lowercase().contains(f);
+                let in_title = title
+                    .as_deref()
+                    .is_some_and(|t| t.to_lowercase().contains(f));
+                if !in_process && !in_title {
+                    continue;
+                }
+            }
+            out.push(UserWindow {
+                pid,
+                process: process.name.clone(),
+                title,
+                bounds: window_bounds(&conn, root, window),
+            });
+        }
+        Ok(out)
+    })
+    .await
+    .map_err(|e| LxhError::ProcessSpawnFailed(e.to_string()))?
+}
+
+/// Display-absolute geometry of a window on `root`, or `None` when the
+/// window disappears mid-enumeration.
+fn window_bounds(conn: &RustConnection, root: u32, window: u32) -> Option<Bounds> {
+    let translated = conn
+        .translate_coordinates(window, root, 0, 0)
+        .ok()
+        .and_then(|c| c.reply().ok());
+    let geom = conn.get_geometry(window).ok().and_then(|c| c.reply().ok());
+    match (translated, geom) {
+        (Some(t), Some(g)) => Some(Bounds {
+            x: t.dst_x as i32,
+            y: t.dst_y as i32,
+            w: g.width as u32,
+            h: g.height as u32,
+        }),
+        _ => None,
+    }
 }
 
 fn pid_of_window(conn: &RustConnection, window: u32) -> Result<u32, LxhError> {
