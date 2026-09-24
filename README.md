@@ -27,6 +27,11 @@ Typical uses:
 - Capture accessibility trees or click UI elements programmatically.
 - Discover installed/running apps and launch them by name.
 - Invoke application menus by path and assert UI state after actions.
+- Test GUI installers, system settings, and multi-app workflows.
+- Verify accessibility compliance by auditing AT-SPI element metadata.
+
+See the [agent skill](skills/linux-x11-harness/SKILL.md) for concrete
+workflows and tool usage patterns.
 
 ## Quick start
 

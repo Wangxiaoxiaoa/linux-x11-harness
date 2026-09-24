@@ -112,6 +112,45 @@ lxh_display_create
   -> lxh_display_destroy
 ```
 
+## Example scenarios
+
+### Text editor end-to-end
+```text
+lxh_display_create -> lxh_app_launch("gedit")
+  -> lxh_input_type("Hello World") -> lxh_input_key("ctrl+s")
+  -> lxh_verify_state(window.title_contains="Hello World")
+  -> lxh_app_terminate -> lxh_display_destroy
+```
+
+### Browser automation
+```text
+lxh_display_create -> lxh_app_launch("chromium --no-first-run https://example.com")
+  -> lxh_wait(3000) -> lxh_capture_window
+  -> lxh_get_window_state(include_tree=true) -- find links/buttons
+  -> lxh_click_element(element_index) -> lxh_wait(2000)
+  -> lxh_capture_window (verify navigation)
+  -> lxh_display_destroy
+```
+
+### Hover to discover unknown UI
+```text
+lxh_display_create -> lxh_app_launch(app)
+  -> lxh_capture_window -- see the toolbar
+  -> lxh_hover(x=toolbar_icon_x, y=toolbar_icon_y) -- read tooltip
+  -> decide: lxh_click_element or lxh_input_click
+  -> lxh_verify_state -- confirm the action
+  -> lxh_display_destroy
+```
+
+### Cross-app clipboard transfer
+```text
+lxh_display_create -> lxh_app_launch("xterm -e 'ls -la > /tmp/out.txt'")
+  -> lxh_wait(2000) -> lxh_app_launch("gedit /tmp/out.txt")
+  -> lxh_get_window_state(include_tree=true) -- read file content
+  -> lxh_clipboard_set(content) -> lxh_app_launch("other_app")
+  -> lxh_input_key("ctrl+v") -> lxh_display_destroy
+```
+
 ## Tips
 
 - Always destroy the display when done to free resources.

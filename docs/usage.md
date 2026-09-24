@@ -74,6 +74,37 @@ Notable parameters:
 - `lxh_click_element` / `lxh_set_value` accept an optional `identity` string (from `lxh_get_window_state` elements) for drift-proof targeting.
 - `lxh_get_desktop_overview` accepts `pid` and `on_screen_only` filters.
 
+## Example scenarios
+
+### Desktop app functional test
+
+```json
+{"method":"tools/call","params":{"name":"lxh_display_create","arguments":{}}}
+{"method":"tools/call","params":{"name":"lxh_app_launch","arguments":{"display_id":"d-1","command":"gedit"}}}
+{"method":"tools/call","params":{"name":"lxh_input_type","arguments":{"display_id":"d-1","text":"Hello World"}}}
+{"method":"tools/call","params":{"name":"lxh_input_key","arguments":{"display_id":"d-1","key":"ctrl+s"}}}
+{"method":"tools/call","params":{"name":"lxh_verify_state","arguments":{"display_id":"d-1","pid":1234,"expect":[{"window":{"exists":true,"title_contains":"Hello World"}}]}}}
+{"method":"tools/call","params":{"name":"lxh_display_destroy","arguments":{"display_id":"d-1"}}}
+```
+
+### Browser automation (Chromium/Electron)
+
+The daemon advertises accessibility on the session bus at startup, so Chromium and Electron apps render full AT-SPI trees. Launch with a URL, wait for the page to load, then use `lxh_get_window_state` to read links, buttons, and form fields from the tree.
+
+### Menu invocation
+
+```json
+{"method":"tools/call","params":{"name":"lxh_invoke_menu","arguments":{"display_id":"d-1","pid":1234,"path":["File","Export as PDF"]}}}
+```
+
+### UI exploration with hover
+
+When the agent encounters an unfamiliar button or icon, `lxh_hover` moves the mouse there, waits for tooltips to appear, and returns a screenshot for the agent to read.
+
+### Zoom into fine detail
+
+`lxh_zoom` captures a cropped, scaled region of a window. The response includes `display_origin` and `scale`; pass `from_zoom: true` to input tools to translate coordinates from the zoom image back to display space.
+
 ## Run tests
 
 ```bash
