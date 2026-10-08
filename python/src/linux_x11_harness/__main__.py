@@ -21,23 +21,25 @@ def main() -> None:
     sub.add_parser("stop", help="Stop the daemon")
     sub.add_parser("setup", help="Register skill and MCP server with detected agents")
 
-    args = parser.parse_args()
+    # Forward everything the wrapper does not know about (--socket PATH,
+    # and future binary flags) straight to the native binary.
+    args, extra = parser.parse_known_args()
 
     if args.command == "setup":
         setup_agents()
-    else:
-        binary = get_binary_path()
-        if not binary.exists():
-            print(
-                f"Binary not found: {binary}. "
-                "Reinstall the package or run 'cargo build --release'.",
-                file=sys.stderr,
-            )
-            sys.exit(1)
-        cmd = [str(binary)]
-        if args.command:
-            cmd.append(args.command)
-        subprocess.run(cmd, stdin=sys.stdin, stdout=sys.stdout, stderr=sys.stderr)
+        return
+
+    binary = get_binary_path()
+    if not binary.exists():
+        print(
+            f"Binary not found: {binary}. "
+            "Reinstall the package or run 'cargo build --release'.",
+            file=sys.stderr,
+        )
+        sys.exit(1)
+
+    cmd = [str(binary), args.command or "mcp", *extra]
+    sys.exit(subprocess.run(cmd, stdin=sys.stdin, stdout=sys.stdout, stderr=sys.stderr).returncode)
 
 
 if __name__ == "__main__":
