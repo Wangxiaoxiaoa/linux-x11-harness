@@ -239,14 +239,6 @@ impl ClipboardHub {
         std::thread::spawn(move || run_spoke(hub, display, true, stop));
     }
 
-    /// Change a spoke's direction policy live.
-    pub fn set_policy(&self, display: &str, policy: Policy) {
-        if let Some(handle) = self.inner.lock().unwrap().spokes.get(display) {
-            handle.policy.store(policy.to_u8(), Ordering::Relaxed);
-            self.changed.notify_all();
-        }
-    }
-
     /// Stop the spoke of a destroyed display.
     pub fn stop(&self, display: &str) {
         if let Some(handle) = self.inner.lock().unwrap().spokes.remove(display) {

@@ -64,6 +64,7 @@ impl DaemonServer {
         }
         self.state.drivers.write().await.clear();
         self.state.zooms.lock().unwrap().clear();
+        self.state.runtime.clipboard().stop_all();
     }
 }
 

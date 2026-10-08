@@ -487,12 +487,7 @@ impl A11yDriver for AtspiA11y {
     }
 }
 
-type WindowStateParts = (
-    Option<String>,
-    Option<String>,
-    Bounds,
-    Option<Screenshot>,
-);
+type WindowStateParts = (Option<String>, Option<String>, Bounds, Option<Screenshot>);
 
 fn get_window_state_sync(
     display: &str,
