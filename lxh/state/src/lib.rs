@@ -487,13 +487,19 @@ impl A11yDriver for AtspiA11y {
     }
 }
 
-#[allow(clippy::type_complexity)]
+type WindowStateParts = (
+    Option<String>,
+    Option<String>,
+    Bounds,
+    Option<Screenshot>,
+);
+
 fn get_window_state_sync(
     display: &str,
     window_id: u32,
     pid: u32,
     include_screenshot: bool,
-) -> Result<(Option<String>, Option<String>, Bounds, Option<Screenshot>), LxhError> {
+) -> Result<WindowStateParts, LxhError> {
     let (conn, _screen) = x11::open_connection(display)?;
 
     let net_name = conn

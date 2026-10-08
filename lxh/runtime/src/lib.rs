@@ -42,18 +42,27 @@ impl Runtime {
         &self.clipboard
     }
 
+    /// Start the desktop spoke (the user's `$DISPLAY`); called lazily so
+    /// headless hosts skip it.
+    fn ensure_desktop_spoke(&self) {
+        let desktop = std::env::var("DISPLAY").unwrap_or_else(|_| ":0".to_string());
+        self.clipboard.start_desktop_spoke(&desktop);
+    }
+
     pub async fn create_display(&self, config: DisplayConfig) -> Result<Display, LxhError> {
         let num = self.next_display.fetch_add(1, Ordering::Relaxed);
         let id = format!("d-{}", Uuid::new_v4().simple());
         let display = format!(":{}", num);
         let display = Display::create(id, display, config).await?;
         // SDK-created displays join the shared clipboard by default.
+        self.ensure_desktop_spoke();
         self.clipboard
             .start_spoke(display.display(), crate::clipboard::Policy::ToSandbox);
         Ok(display)
     }
 
     pub async fn attach_display(&self, display: &str) -> Result<Display, LxhError> {
+        self.ensure_desktop_spoke();
         let id = display.to_string();
         Display::attach(id, display.to_string()).await
     }

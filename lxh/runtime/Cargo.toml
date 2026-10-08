@@ -10,4 +10,3 @@ lxh-driver = { workspace = true }
 tokio = { workspace = true }
 uuid = { workspace = true }
 x11rb = { workspace = true }
-arboard = { version = "3", default-features = false }
