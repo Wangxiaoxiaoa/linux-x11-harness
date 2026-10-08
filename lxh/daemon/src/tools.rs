@@ -19,10 +19,6 @@ pub struct DisplayCreateArgs {
     pub preview: Option<bool>,
     #[serde(default)]
     pub name: Option<String>,
-    /// Shared-clipboard policy for this display:
-    /// "to_sandbox" (default), "bidirectional", "off".
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub clipboard_sync: Option<String>,
 }
 
 #[derive(Debug, Deserialize, JsonSchema)]
