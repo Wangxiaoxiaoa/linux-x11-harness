@@ -62,6 +62,8 @@ impl DaemonServer {
             self.state.previews.close(&id);
             let _ = display.lock().await.destroy().await;
         }
+        self.state.drivers.write().await.clear();
+        self.state.zooms.lock().unwrap().clear();
     }
 }
 
@@ -204,12 +206,16 @@ async fn dispatch_tool_call(
 }
 
 async fn cleanup_session(state: Arc<DaemonState>, session: &mut ClientSession) {
-    let mut displays = state.displays.write().await;
     for id in session.owned_displays.drain() {
         state.previews.close(&id);
-        if let Some(display) = displays.remove(&id) {
+        // Short critical sections: remove from each map, then run the slow
+        // process kills without holding any map lock.
+        let display = state.displays.write().await.remove(&id);
+        if let Some(display) = display {
             let _ = display.lock().await.destroy().await;
         }
+        state.drivers.write().await.remove(&id);
+        state.zooms.lock().unwrap().remove(&id);
     }
 }
 

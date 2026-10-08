@@ -129,6 +129,7 @@ pub async fn destroy_display(
 
     state.displays.write().await.remove(&args.display_id);
     state.drivers.write().await.remove(&args.display_id);
+    state.zooms.lock().unwrap().remove(&args.display_id);
     session.owned_displays.remove(&args.display_id);
 
     Ok(json!({ "success": true }))
@@ -174,6 +175,7 @@ pub async fn detach_display(state: &DaemonState, args: &Value) -> Result<Value, 
 
     state.displays.write().await.remove(&args.display_id);
     state.drivers.write().await.remove(&args.display_id);
+    state.zooms.lock().unwrap().remove(&args.display_id);
 
     Ok(json!({ "success": true }))
 }
