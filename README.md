@@ -17,7 +17,7 @@
 
 `linux-x11-harness` creates isolated X11 displays and lets AI agents control GUI applications. Each display gets its own X server, window manager, and application process group, so agents can click, type, capture screenshots, and read accessibility trees without touching the host desktop.
 
-A read-only preview window opens on your desktop while the agent works, so you can watch every click and screenshot in real time.
+A live preview panel opens on your desktop while the agent works, so you can watch every click and screenshot in real time. Previews are read-only by default; double-click one to open an expanded interactive view where your mouse and keyboard directly control the sandboxed app.
 
 Typical uses:
 
@@ -29,6 +29,7 @@ Typical uses:
 - Invoke application menus by path and assert UI state after actions.
 - Test GUI installers, system settings, and multi-app workflows.
 - Verify accessibility compliance by auditing AT-SPI element metadata.
+- Read screen text with local OCR — works even without a vision model.
 
 See the [agent skill](skills/linux-x11-harness/SKILL.md) for concrete
 workflows and tool usage patterns.
