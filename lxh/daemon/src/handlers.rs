@@ -602,15 +602,10 @@ pub async fn wait(_state: &DaemonState, args: &Value) -> Result<Value, LxhError>
 
 pub async fn clipboard_get(state: &DaemonState, args: &Value) -> Result<Value, LxhError> {
     let args: DisplayIdArgs = parse_args(args)?;
-    let display = find_display(state, &args.display_id).await?;
-    let display_str = display.lock().await.display().to_string();
-    let hub = Arc::clone(state.runtime.clipboard());
-    let text = tokio::task::spawn_blocking(move || {
-        lxh_runtime::clipboard::read_display_clipboard(&display_str).unwrap_or_else(|| hub.get())
-    })
-    .await
-    .map_err(|e| LxhError::ProcessSpawnFailed(e.to_string()))?;
-    Ok(json!({ "text": text }))
+    // The shared clipboard is global; display_id is accepted for interface
+    // stability and documented as ignored.
+    let _ = args;
+    Ok(json!({ "text": state.runtime.clipboard().get() }))
 }
 
 pub async fn clipboard_set(state: &DaemonState, args: &Value) -> Result<Value, LxhError> {

@@ -211,12 +211,18 @@ async fn cleanup_session(state: Arc<DaemonState>, session: &mut ClientSession) {
         state.previews.close(&id);
         // Short critical sections: remove from each map, then run the slow
         // process kills without holding any map lock.
-        let display = state.displays.write().await.remove(&id);
-        if let Some(display) = display {
-            let _ = display.lock().await.destroy().await;
-        }
+        // owned_displays ids are always registered in the displays map.
+        let display = state
+            .displays
+            .write()
+            .await
+            .remove(&id)
+            .expect("owned display registered");
+        let display_str = display.lock().await.display().to_string();
+        let _ = display.lock().await.destroy().await;
         state.drivers.write().await.remove(&id);
         state.zooms.lock().unwrap().remove(&id);
+        state.runtime.clipboard().stop(&display_str);
     }
 }
 
