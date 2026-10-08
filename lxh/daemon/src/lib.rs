@@ -1,3 +1,4 @@
+#![forbid(unsafe_code)]
 pub mod apps;
 pub mod handlers;
 pub mod protocol;

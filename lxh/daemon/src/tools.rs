@@ -19,6 +19,10 @@ pub struct DisplayCreateArgs {
     pub preview: Option<bool>,
     #[serde(default)]
     pub name: Option<String>,
+    /// Shared-clipboard policy for this display:
+    /// "to_sandbox" (default), "bidirectional", "off".
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub clipboard_sync: Option<String>,
 }
 
 #[derive(Debug, Deserialize, JsonSchema)]
@@ -385,7 +389,9 @@ pub fn tool_definitions() -> Vec<Value> {
              desktop (:0), focus it with `wmctrl -a` instead of calling this; \
              if it does NOT run there, ALWAYS open it through this tool plus \
              lxh_app_launch, never by shell-launching GUI apps on the user's \
-             desktop.",
+             desktop. Optional clipboard_sync: \"to_sandbox\" (default, desktop \
+             copies flow into the sandbox), \"bidirectional\" (sandbox copies \
+             also reach the desktop), \"off\".",
             root_schema::<DisplayCreateArgs>(),
         ),
         tool_def(

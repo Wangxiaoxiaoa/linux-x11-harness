@@ -1,3 +1,4 @@
+#![forbid(unsafe_code)]
 use async_trait::async_trait;
 use lxh_core::{x11, InputDriver, LxhError, MouseButton};
 use std::{thread, time::Duration};
@@ -488,43 +489,6 @@ impl lxh_core::WindowDriver for X11WindowManager {
             .map_err(x11::xerr)?;
             conn.flush().map_err(x11::xerr)?;
             Ok(())
-        })
-        .await
-        .map_err(|e| LxhError::ProcessSpawnFailed(e.to_string()))?
-    }
-}
-
-pub struct ArboardClipboard;
-
-impl ArboardClipboard {
-    pub fn new() -> Result<Self, LxhError> {
-        let _ = arboard::Clipboard::new().map_err(|e| LxhError::InvalidArgument(e.to_string()))?;
-        Ok(Self)
-    }
-}
-
-#[async_trait]
-impl lxh_core::ClipboardDriver for ArboardClipboard {
-    async fn clipboard_get(&self) -> Result<String, LxhError> {
-        task::spawn_blocking(|| {
-            let mut clipboard =
-                arboard::Clipboard::new().map_err(|e| LxhError::InvalidArgument(e.to_string()))?;
-            clipboard
-                .get_text()
-                .map_err(|e| LxhError::InvalidArgument(e.to_string()))
-        })
-        .await
-        .map_err(|e| LxhError::ProcessSpawnFailed(e.to_string()))?
-    }
-
-    async fn clipboard_set(&self, text: &str) -> Result<(), LxhError> {
-        let text = text.to_string();
-        task::spawn_blocking(move || {
-            let mut clipboard =
-                arboard::Clipboard::new().map_err(|e| LxhError::InvalidArgument(e.to_string()))?;
-            clipboard
-                .set_text(text)
-                .map_err(|e| LxhError::InvalidArgument(e.to_string()))
         })
         .await
         .map_err(|e| LxhError::ProcessSpawnFailed(e.to_string()))?

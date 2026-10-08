@@ -1,8 +1,12 @@
+#![forbid(unsafe_code)]
+use std::sync::Arc;
+
 use std::sync::atomic::{AtomicU32, Ordering};
 
 use lxh_core::LxhError;
 use uuid::Uuid;
 
+pub mod clipboard;
 pub mod display;
 pub mod process;
 pub mod wm;
@@ -22,20 +26,31 @@ fn process_scoped_display_start() -> u32 {
 
 pub struct Runtime {
     next_display: AtomicU32,
+    clipboard: Arc<crate::clipboard::ClipboardHub>,
 }
 
 impl Runtime {
     pub fn new() -> Self {
         Self {
             next_display: AtomicU32::new(process_scoped_display_start()),
+            clipboard: Arc::new(crate::clipboard::ClipboardHub::new()),
         }
+    }
+
+    /// The shared clipboard hub (one per process).
+    pub fn clipboard(&self) -> &Arc<crate::clipboard::ClipboardHub> {
+        &self.clipboard
     }
 
     pub async fn create_display(&self, config: DisplayConfig) -> Result<Display, LxhError> {
         let num = self.next_display.fetch_add(1, Ordering::Relaxed);
         let id = format!("d-{}", Uuid::new_v4().simple());
         let display = format!(":{}", num);
-        Display::create(id, display, config).await
+        let display = Display::create(id, display, config).await?;
+        // SDK-created displays join the shared clipboard by default.
+        self.clipboard
+            .start_spoke(display.display(), crate::clipboard::Policy::ToSandbox);
+        Ok(display)
     }
 
     pub async fn attach_display(&self, display: &str) -> Result<Display, LxhError> {

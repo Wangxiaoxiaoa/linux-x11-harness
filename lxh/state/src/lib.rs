@@ -1,3 +1,4 @@
+#![forbid(unsafe_code)]
 use async_trait::async_trait;
 use image::{ImageEncoder, RgbImage};
 use lxh_core::{

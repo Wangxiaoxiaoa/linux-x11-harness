@@ -1,3 +1,4 @@
+#![forbid(unsafe_code)]
 use async_trait::async_trait;
 
 #[derive(Debug, thiserror::Error)]
@@ -188,12 +189,6 @@ pub trait WindowDriver: Send + Sync {
     async fn close_window(&self, window_id: u32) -> Result<(), LxhError>;
 }
 
-#[async_trait]
-pub trait ClipboardDriver: Send + Sync {
-    async fn clipboard_get(&self) -> Result<String, LxhError>;
-    async fn clipboard_set(&self, text: &str) -> Result<(), LxhError>;
-}
-
 /// One state assertion from `verify_state`.
 #[derive(Debug, Clone)]
 pub struct StateExpectation {
@@ -252,9 +247,7 @@ pub trait A11yDriver: Send + Sync {
 }
 
 #[async_trait]
-pub trait Driver:
-    InputDriver + CaptureDriver + WindowDriver + ClipboardDriver + A11yDriver
-{
+pub trait Driver: InputDriver + CaptureDriver + WindowDriver + A11yDriver {
     async fn click_element(
         &self,
         pid: u32,

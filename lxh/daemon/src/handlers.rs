@@ -74,6 +74,17 @@ pub async fn create_display(
     let args: DisplayCreateArgs = parse_args(args)?;
     let config = DisplayConfig::default();
     let preview = args.preview.unwrap_or(true);
+    let clipboard_policy = args
+        .clipboard_sync
+        .as_deref()
+        .and_then(lxh_runtime::clipboard::Policy::parse)
+        .or_else(|| {
+            std::env::var("LXH_CLIPBOARD_SYNC")
+                .ok()
+                .as_deref()
+                .and_then(lxh_runtime::clipboard::Policy::parse)
+        })
+        .unwrap_or(lxh_runtime::clipboard::Policy::ToSandbox);
 
     let display = state.runtime.create_display(config).await?;
     let id = display.id().to_string();
@@ -96,6 +107,10 @@ pub async fn create_display(
     if !args.persistent {
         session.owned_displays.insert(id.clone());
     }
+    state
+        .runtime
+        .clipboard()
+        .start_spoke(&display_str, clipboard_policy);
 
     Ok(json!({ "display_id": id, "display": display_str }))
 }
@@ -113,6 +128,10 @@ pub async fn attach_display(state: &DaemonState, args: &Value) -> Result<Value, 
         .await
         .insert(id.clone(), Arc::new(Mutex::new(display)));
     state.drivers.write().await.insert(id.clone(), driver);
+    state
+        .runtime
+        .clipboard()
+        .start_spoke(&display_str, lxh_runtime::clipboard::Policy::Bidirectional);
 
     Ok(json!({ "display_id": id, "display": display_str }))
 }
@@ -124,12 +143,14 @@ pub async fn destroy_display(
 ) -> Result<Value, LxhError> {
     let args: DisplayIdArgs = parse_args(args)?;
     let display = find_display(state, &args.display_id).await?;
+    let display_str = display.lock().await.display().to_string();
     state.previews.close(&args.display_id);
     display.lock().await.destroy().await?;
 
     state.displays.write().await.remove(&args.display_id);
     state.drivers.write().await.remove(&args.display_id);
     state.zooms.lock().unwrap().remove(&args.display_id);
+    state.runtime.clipboard().stop(&display_str);
     session.owned_displays.remove(&args.display_id);
 
     Ok(json!({ "success": true }))
@@ -167,6 +188,7 @@ fn preview_title(session: &ClientSession, name: &Option<String>) -> String {
 pub async fn detach_display(state: &DaemonState, args: &Value) -> Result<Value, LxhError> {
     let args: DisplayIdArgs = parse_args(args)?;
     let display = find_display(state, &args.display_id).await?;
+    let display_str = display.lock().await.display().to_string();
     if !display.lock().await.is_external() {
         return Err(LxhError::InvalidArgument(
             "cannot detach a harness display; use lxh_display_destroy".into(),
@@ -176,6 +198,7 @@ pub async fn detach_display(state: &DaemonState, args: &Value) -> Result<Value, 
     state.displays.write().await.remove(&args.display_id);
     state.drivers.write().await.remove(&args.display_id);
     state.zooms.lock().unwrap().remove(&args.display_id);
+    state.runtime.clipboard().stop(&display_str);
 
     Ok(json!({ "success": true }))
 }
@@ -579,15 +602,20 @@ pub async fn wait(_state: &DaemonState, args: &Value) -> Result<Value, LxhError>
 
 pub async fn clipboard_get(state: &DaemonState, args: &Value) -> Result<Value, LxhError> {
     let args: DisplayIdArgs = parse_args(args)?;
-    let driver = find_driver(state, &args.display_id).await?;
-    let text = driver.clipboard_get().await?;
+    let display = find_display(state, &args.display_id).await?;
+    let display_str = display.lock().await.display().to_string();
+    let hub = Arc::clone(state.runtime.clipboard());
+    let text = tokio::task::spawn_blocking(move || {
+        lxh_runtime::clipboard::read_display_clipboard(&display_str).unwrap_or_else(|| hub.get())
+    })
+    .await
+    .map_err(|e| LxhError::ProcessSpawnFailed(e.to_string()))?;
     Ok(json!({ "text": text }))
 }
 
 pub async fn clipboard_set(state: &DaemonState, args: &Value) -> Result<Value, LxhError> {
     let args: ClipboardSetArgs = parse_args(args)?;
-    let driver = find_driver(state, &args.display_id).await?;
-    driver.clipboard_set(&args.text).await?;
+    state.runtime.clipboard().set(&args.text);
     Ok(json!({ "success": true }))
 }
 

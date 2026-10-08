@@ -118,9 +118,10 @@ async fn run_stop(socket_path: PathBuf) {
         eprintln!("daemon not running");
         std::process::exit(1);
     }
-    unsafe {
-        libc::kill(pid as i32, libc::SIGTERM);
-    }
+    // Graceful stop via SIGTERM; /bin/kill avoids unsafe libc calls.
+    let _ = std::process::Command::new("kill")
+        .args(["-TERM", &pid.to_string()])
+        .status();
     let _ = tokio::fs::remove_file(&pid_path).await;
     let _ = tokio::fs::remove_file(&socket_path).await;
     println!("stopped daemon {pid}");

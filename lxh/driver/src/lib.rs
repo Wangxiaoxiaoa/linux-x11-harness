@@ -1,9 +1,10 @@
+#![forbid(unsafe_code)]
 use async_trait::async_trait;
-use lxh_action::{ArboardClipboard, X11WindowManager, XtestInput};
+use lxh_action::{X11WindowManager, XtestInput};
 use lxh_core::{
-    A11yDriver, Bounds, CaptureDriver, ClipboardDriver, DesktopOverview, Driver,
-    GetWindowStateResult, InputDriver, LxhError, MouseButton, RegionCapture, Screenshot,
-    StateExpectation, VerificationResult, WindowDriver,
+    A11yDriver, Bounds, CaptureDriver, DesktopOverview, Driver, GetWindowStateResult, InputDriver,
+    LxhError, MouseButton, RegionCapture, Screenshot, StateExpectation, VerificationResult,
+    WindowDriver,
 };
 use lxh_state::{AtspiA11y, X11Capture};
 
@@ -12,7 +13,6 @@ pub struct DefaultDriver {
     capture: X11Capture,
     a11y: AtspiA11y,
     window: X11WindowManager,
-    clipboard: ArboardClipboard,
 }
 
 impl DefaultDriver {
@@ -22,7 +22,6 @@ impl DefaultDriver {
             capture: X11Capture::new(display)?,
             a11y: AtspiA11y::new(display)?,
             window: X11WindowManager::new(display)?,
-            clipboard: ArboardClipboard::new()?,
         })
     }
 }
@@ -117,17 +116,6 @@ impl WindowDriver for DefaultDriver {
 
     async fn close_window(&self, window_id: u32) -> Result<(), LxhError> {
         self.window.close_window(window_id).await
-    }
-}
-
-#[async_trait]
-impl ClipboardDriver for DefaultDriver {
-    async fn clipboard_get(&self) -> Result<String, LxhError> {
-        self.clipboard.clipboard_get().await
-    }
-
-    async fn clipboard_set(&self, text: &str) -> Result<(), LxhError> {
-        self.clipboard.clipboard_set(text).await
     }
 }
 

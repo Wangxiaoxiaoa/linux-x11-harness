@@ -18,6 +18,7 @@
 //! a cell opens the interactive expando ([`expando`]), which forwards mouse
 //! and keyboard input into the harness display.
 
+#![forbid(unsafe_code)]
 mod cell;
 mod container;
 mod expando;
