@@ -17,7 +17,7 @@
 use std::collections::hash_map::DefaultHasher;
 use std::collections::HashMap;
 use std::hash::{Hash, Hasher};
-use std::sync::atomic::{AtomicBool, AtomicU8, Ordering};
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Condvar, Mutex};
 use std::time::{Duration, Instant};
 
@@ -29,45 +29,6 @@ const SPOKE_TICK: Duration = Duration::from_millis(50);
 const LOCAL_POLL: Duration = Duration::from_secs(1);
 /// Conversion-request reply timeout before a requestor window is reaped.
 const READ_TIMEOUT: Duration = Duration::from_secs(2);
-
-/// Direction policy for one display's clipboard sync. The desktop spoke
-/// always runs with `Bidirectional` semantics.
-#[derive(Clone, Copy, PartialEq, Eq, Debug)]
-pub enum Policy {
-    /// Not part of the shared clipboard.
-    Off,
-    /// Desktop changes flow in; sandbox changes never reach the desktop.
-    ToSandbox,
-    /// Full VM-style sharing.
-    Bidirectional,
-}
-
-impl Policy {
-    pub fn parse(s: &str) -> Option<Policy> {
-        match s {
-            "off" => Some(Policy::Off),
-            "to_sandbox" => Some(Policy::ToSandbox),
-            "bidirectional" => Some(Policy::Bidirectional),
-            _ => None,
-        }
-    }
-
-    fn from_u8(v: u8) -> Policy {
-        match v {
-            1 => Policy::ToSandbox,
-            2 => Policy::Bidirectional,
-            _ => Policy::Off,
-        }
-    }
-
-    fn to_u8(self) -> u8 {
-        match self {
-            Policy::Off => 0,
-            Policy::ToSandbox => 1,
-            Policy::Bidirectional => 2,
-        }
-    }
-}
 
 fn fingerprint(text: &str) -> u64 {
     let mut hasher = DefaultHasher::new();
@@ -98,11 +59,22 @@ struct SpokeHandle {
     stop: Arc<AtomicBool>,
 }
 
+/// Where the current canonical content came from. The desktop spoke
+/// skips pushing sandbox-origin updates to the user's desktop; everything
+/// else flows everywhere.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub enum Origin {
+    Desktop,
+    Agent,
+    Sandbox,
+}
+
 #[derive(Clone)]
 struct Canonical {
     text: String,
     fp: u64,
     version: u64,
+    origin: Origin,
 }
 
 struct HubInner {
@@ -132,6 +104,7 @@ impl ClipboardHub {
                     text: String::new(),
                     fp: fingerprint(""),
                     version: 0,
+                    origin: Origin::Desktop,
                 },
                 spokes: HashMap::new(),
             }),
@@ -148,8 +121,13 @@ impl ClipboardHub {
         self.inner.lock().unwrap().canonical.version
     }
 
+    fn canonical(&self) -> Canonical {
+        self.inner.lock().unwrap().canonical.clone()
+    }
+
     /// Replace the shared content if it differs; returns true when changed.
-    pub fn set_if_changed(&self, text: String) -> bool {
+    /// `origin` decides where the update propagates (see `Origin`).
+    fn set_if_changed(&self, text: String, origin: Origin) -> bool {
         let text = truncate(text);
         let fp = fingerprint(&text);
         let mut inner = self.inner.lock().unwrap();
@@ -160,14 +138,16 @@ impl ClipboardHub {
             text,
             fp,
             version: inner.canonical.version + 1,
+            origin,
         };
         self.changed.notify_all();
         true
     }
 
-    /// Replace the shared content; every spoke pushes it to its display.
+    /// Replace the shared content; every spoke pushes it to its display,
+    /// including the desktop.
     pub fn set(&self, text: &str) {
-        self.set_if_changed(text.to_string());
+        self.set_if_changed(text.to_string(), Origin::Agent);
     }
 
     /// Block until canonical changes or the timeout elapses.
@@ -182,12 +162,8 @@ impl ClipboardHub {
 
     /// Start a spoke for `display`. Call once per display; the daemon
     /// creates each display exactly once.
-    pub fn start_spoke(self: &Arc<Self>, display: &str, policy: Policy) {
-        if policy == Policy::Off {
-            return;
-        }
+    pub fn start_spoke(self: &Arc<Self>, display: &str) {
         let stop = Arc::new(AtomicBool::new(false));
-        let policy_cell = Arc::new(AtomicU8::new(policy.to_u8()));
         self.inner.lock().unwrap().spokes.insert(
             display.to_string(),
             SpokeHandle {
@@ -196,7 +172,7 @@ impl ClipboardHub {
         );
         let hub = Arc::clone(self);
         let display = display.to_string();
-        std::thread::spawn(move || run_spoke(hub, display, policy_cell, stop));
+        std::thread::spawn(move || run_spoke(hub, display, false, stop));
     }
 
     /// Start the desktop spoke (the user's `:0`): always full sharing —
@@ -208,7 +184,6 @@ impl ClipboardHub {
             return;
         }
         let stop = Arc::new(AtomicBool::new(false));
-        let policy_cell = Arc::new(AtomicU8::new(Policy::Bidirectional.to_u8()));
         inner.spokes.insert(
             display.to_string(),
             SpokeHandle {
@@ -217,7 +192,7 @@ impl ClipboardHub {
         );
         let hub = Arc::clone(self);
         let display = display.to_string();
-        std::thread::spawn(move || run_spoke(hub, display, policy_cell, stop));
+        std::thread::spawn(move || run_spoke(hub, display, true, stop));
     }
 
     /// Stop the spoke of a destroyed display.
@@ -266,12 +241,7 @@ fn intern_atoms(conn: &x11rb::rust_connection::RustConnection) -> Option<SpokeAt
     })
 }
 
-fn run_spoke(
-    hub: Arc<ClipboardHub>,
-    display: String,
-    policy: Arc<AtomicU8>,
-    stop: Arc<AtomicBool>,
-) {
+fn run_spoke(hub: Arc<ClipboardHub>, display: String, desktop: bool, stop: Arc<AtomicBool>) {
     use x11rb::connection::Connection as _;
     use x11rb::protocol::xproto::{
         AtomEnum, ConnectionExt as _, CreateWindowAux, PropMode, SelectionNotifyEvent, WindowClass,
@@ -314,17 +284,19 @@ fn run_spoke(
     let _ = conn.flush();
 
     // The version of the canonical value this display currently serves.
-    // 0 == serves nothing yet. Three state variables in total.
+    // 0 == serves nothing yet. The desktop spoke additionally keeps the
+    // text it serves on the display: sandbox-origin updates must not
+    // reach the desktop clipboard, so it serves a snapshot that only
+    // desktop/agent-origin updates replace.
     let mut served = 0u64;
     let mut owned = false;
     let mut last_poll = Instant::now() - LOCAL_POLL; // first read is immediate
+    let mut serving = String::new();
 
     loop {
         if stop.load(Ordering::Relaxed) {
             break;
         }
-        let policy = Policy::from_u8(policy.load(Ordering::Relaxed));
-
         // Drain X events: serve paste requests; watch for takeovers.
         while let Ok(Some(event)) = conn.poll_for_event() {
             match event {
@@ -346,7 +318,7 @@ fn run_spoke(
                     } else if req.target == atoms.utf8_string
                         || req.target == AtomEnum::STRING.into()
                     {
-                        let text = hub.get();
+                        let text = if desktop { &serving } else { &hub.get() };
                         let _ = conn.change_property8(
                             PropMode::REPLACE,
                             req.requestor,
@@ -394,11 +366,9 @@ fn run_spoke(
                 // already lives on this display, so no re-grab is needed.
                 Event::SelectionClear(clear) if clear.selection == atoms.clipboard => {
                     owned = false;
-                    if policy == Policy::Bidirectional {
-                        if let Some(local) = read_display_clipboard(&display) {
-                            if hub.set_if_changed(local) {
-                                served = hub.version();
-                            }
+                    if let Some(local) = read_display_clipboard(&display) {
+                        if hub.set_if_changed(local, Origin::Sandbox) {
+                            served = hub.version();
                         }
                     }
                 }
@@ -406,13 +376,13 @@ fn run_spoke(
             }
         }
 
-        // Bidirectional safety net: an app may have copied while we were
-        // not the owner (e.g. before our first grab) — SelectionClear only
-        // fires when we DID own it. One read per second covers that gap.
-        if policy == Policy::Bidirectional && !owned && last_poll.elapsed() >= LOCAL_POLL {
+        // Safety net: an app may have copied while we were not the owner
+        // (e.g. before our first grab) — SelectionClear only fires when we
+        // DID own it. One read per second covers that gap.
+        if !owned && last_poll.elapsed() >= LOCAL_POLL {
             last_poll = Instant::now();
             if let Some(local) = read_display_clipboard(&display) {
-                if hub.set_if_changed(local) {
+                if hub.set_if_changed(local, Origin::Sandbox) {
                     served = hub.version();
                     // The content is already on this display; serving it
                     // needs no ownership change.
@@ -422,12 +392,20 @@ fn run_spoke(
         }
 
         // Canonical changed from elsewhere: take ownership so this
-        // display serves the shared content.
-        if hub.version() != served {
+        // display serves the shared content. The desktop spoke skips
+        // sandbox-origin updates and keeps serving its previous snapshot
+        // — sandbox content never overwrites the user's desktop clipboard
+        // (agent writes are Origin::Agent and always flow through).
+        let snapshot = hub.canonical();
+        let skip_desktop = snapshot.origin == Origin::Sandbox;
+        if hub.version() != served && !(desktop && skip_desktop) {
             let _ = conn.set_selection_owner(win, atoms.clipboard, x11rb::CURRENT_TIME);
             let _ = conn.flush();
             owned = true;
             served = hub.version();
+            if desktop {
+                serving = snapshot.text.clone();
+            }
         }
 
         hub.wait_for_change(SPOKE_TICK);

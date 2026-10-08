@@ -389,9 +389,7 @@ pub fn tool_definitions() -> Vec<Value> {
              desktop (:0), focus it with `wmctrl -a` instead of calling this; \
              if it does NOT run there, ALWAYS open it through this tool plus \
              lxh_app_launch, never by shell-launching GUI apps on the user's \
-             desktop. Optional clipboard_sync: \"to_sandbox\" (default, desktop \
-             copies flow into the sandbox), \"bidirectional\" (sandbox copies \
-             also reach the desktop), \"off\".",
+             desktop.",
             root_schema::<DisplayCreateArgs>(),
         ),
         tool_def(

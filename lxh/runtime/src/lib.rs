@@ -56,8 +56,7 @@ impl Runtime {
         let display = Display::create(id, display, config).await?;
         // SDK-created displays join the shared clipboard by default.
         self.ensure_desktop_spoke();
-        self.clipboard
-            .start_spoke(display.display(), crate::clipboard::Policy::ToSandbox);
+        self.clipboard.start_spoke(display.display());
         Ok(display)
     }
 

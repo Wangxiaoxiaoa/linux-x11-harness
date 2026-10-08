@@ -74,17 +74,6 @@ pub async fn create_display(
     let args: DisplayCreateArgs = parse_args(args)?;
     let config = DisplayConfig::default();
     let preview = args.preview.unwrap_or(true);
-    let clipboard_policy = args
-        .clipboard_sync
-        .as_deref()
-        .and_then(lxh_runtime::clipboard::Policy::parse)
-        .or_else(|| {
-            std::env::var("LXH_CLIPBOARD_SYNC")
-                .ok()
-                .as_deref()
-                .and_then(lxh_runtime::clipboard::Policy::parse)
-        })
-        .unwrap_or(lxh_runtime::clipboard::Policy::ToSandbox);
 
     let display = state.runtime.create_display(config).await?;
     let id = display.id().to_string();
@@ -107,10 +96,7 @@ pub async fn create_display(
     if !args.persistent {
         session.owned_displays.insert(id.clone());
     }
-    state
-        .runtime
-        .clipboard()
-        .start_spoke(&display_str, clipboard_policy);
+    state.runtime.clipboard().start_spoke(&display_str);
 
     Ok(json!({ "display_id": id, "display": display_str }))
 }
@@ -128,10 +114,7 @@ pub async fn attach_display(state: &DaemonState, args: &Value) -> Result<Value, 
         .await
         .insert(id.clone(), Arc::new(Mutex::new(display)));
     state.drivers.write().await.insert(id.clone(), driver);
-    state
-        .runtime
-        .clipboard()
-        .start_spoke(&display_str, lxh_runtime::clipboard::Policy::Bidirectional);
+    state.runtime.clipboard().start_spoke(&display_str);
 
     Ok(json!({ "display_id": id, "display": display_str }))
 }
