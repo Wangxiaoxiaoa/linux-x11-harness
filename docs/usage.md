@@ -35,12 +35,29 @@ To run a fully separate daemon process, use a unique socket:
 
 ## Display preview
 
-Displays created on this machine automatically open a read-only preview window on your desktop, scaled to a fraction of your screen (aspect ratio preserved). The preview is rendered by the daemon and never touches the display's lifecycle.
+Displays created on this machine automatically open a live preview panel on your desktop, scaled to a fraction of your screen (aspect ratio preserved). The preview is rendered by the daemon and never touches the display's lifecycle.
 
-- Double-click the preview to zoom it; double-click again to restore.
-- Closing the preview window (or calling `lxh_preview_close`) does not affect the display.
+- Previews are **read-only by default** — safe to keep on screen while the agent works.
+- **Double-click a preview** to open an expanded interactive window (~50% screen height, docked top-left): your mouse clicks, motion, wheel and keyboard are forwarded into the sandboxed app via XTEST, and the view refreshes ~100ms. Exit with `Esc` or the window's close button; the small thumbnail keeps rendering in the panel.
+- Only one expanded window exists at a time; double-clicking the same cell toggles it closed, another cell replaces it.
+- Closing the preview panel (or calling `lxh_preview_close`) does not affect the display.
 - Reopen it later with `lxh_preview_open`.
 - The preview requires a running desktop session (`DISPLAY`). On headless hosts no preview is created and everything else works as usual.
+
+## Routing: check the user's desktop first
+
+For any GUI app request, call `lxh_list_user_windows` (optionally filtered by `name`) before creating a display: if the app already runs on the user's desktop (`:0`), focus it with `wmctrl -a` instead of creating a sandbox; if not, create one with `lxh_display_create` + `lxh_app_launch`.
+
+## Reading screen text without vision
+
+If the model cannot view images, or the app exposes no accessibility tree, capture with `save_to` and read with `lxh_ocr`:
+
+```json
+{"method":"tools/call","params":{"name":"lxh_capture_window","arguments":{"display_id":"d-1","window_id":123,"save_to":"/tmp/shot.png"}}}
+{"method":"tools/call","params":{"name":"lxh_ocr","arguments":{"image_path":"/tmp/shot.png"}}}
+```
+
+`save_to` writes the PNG and returns its path instead of base64 data (also available on `lxh_zoom`). `lxh_ocr` probes engines in order: tesseract, then the python package `rapidocr_onnxruntime`.
 
 ## Example MCP session
 
@@ -48,8 +65,10 @@ Displays created on this machine automatically open a read-only preview window o
 {"jsonrpc":"2.0","id":1,"method":"tools/list","params":{}}
 {"jsonrpc":"2.0","id":2,"method":"tools/call","params":{"name":"lxh_display_create","arguments":{}}}
 {"jsonrpc":"2.0","id":3,"method":"tools/call","params":{"name":"lxh_app_launch","arguments":{"display_id":"d-99","command":"xterm","args":[]}}}
-{"jsonrpc":"2.0","id":4,"method":"tools/call","params":{"name":"lxh_capture_screenshot","arguments":{"display_id":"d-99"}}}
-{"jsonrpc":"2.0","id":5,"method":"tools/call","params":{"name":"lxh_display_destroy","arguments":{"display_id":"d-99"}}}
+{"jsonrpc":"2.0","id":4,"method":"tools/call","params":{"name":"lxh_get_desktop_overview","arguments":{"display_id":"d-99"}}}
+{"jsonrpc":"2.0","id":5,"method":"tools/call","params":{"name":"lxh_capture_window","arguments":{"display_id":"d-99","window_id":4194314,"save_to":"/tmp/shot.png"}}}
+{"jsonrpc":"2.0","id":6,"method":"tools/call","params":{"name":"lxh_ocr","arguments":{"image_path":"/tmp/shot.png"}}}
+{"jsonrpc":"2.0","id":7,"method":"tools/call","params":{"name":"lxh_display_destroy","arguments":{"display_id":"d-99"}}}
 ```
 
 ## Tool categories
@@ -58,10 +77,12 @@ Displays created on this machine automatically open a read-only preview window o
 |---|---|
 | Display | `lxh_display_create` `lxh_display_destroy` `lxh_display_attach` `lxh_display_detach` `lxh_display_info` |
 | Apps | `lxh_app_launch` `lxh_app_terminate` `lxh_list_apps` |
-| Input | `lxh_input_click` `lxh_input_move` `lxh_input_type` `lxh_input_key` `lxh_input_scroll` `lxh_input_drag` `lxh_input_get_cursor_position` |
-| Capture | `lxh_capture_screenshot` `lxh_capture_window` `lxh_zoom` |
-| State | `lxh_get_desktop_overview` `lxh_get_window_state` |
-| AT-SPI | `lxh_set_value` `lxh_click_element` `lxh_invoke_menu` `lxh_verify_state` |
+| User desktop | `lxh_list_user_windows` |
+| Input | `lxh_input_click` `lxh_input_move` `lxh_input_type` `lxh_input_key` `lxh_input_scroll` `lxh_input_drag` `lxh_input_get_cursor_position` `lxh_hover` |
+| Capture | `lxh_capture_window` `lxh_zoom` |
+| OCR | `lxh_ocr` |
+| State | `lxh_get_desktop_overview` `lxh_get_window_state` `lxh_verify_state` |
+| AT-SPI | `lxh_set_value` `lxh_click_element` `lxh_invoke_menu` |
 | Window | `lxh_window_focus` `lxh_window_set_frame` `lxh_window_close` |
 | Clipboard | `lxh_clipboard_get` `lxh_clipboard_set` |
 | Preview | `lxh_preview_open` `lxh_preview_close` |

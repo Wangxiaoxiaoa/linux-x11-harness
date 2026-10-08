@@ -22,3 +22,4 @@ python/src/linux_x11_harness/skill/
 .codex/
 .opencode/
 .pi/
+.venv/

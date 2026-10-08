@@ -279,7 +279,10 @@ lxh-runtime/
 
 The `XvfbBackend` is implemented in `lxh-runtime`. Each harness display is a
 headless Xvfb server; user-visible output is provided by a separate preview
-window (`lxh-preview`) that does not affect the display lifecycle.
+panel (`lxh-preview`) that does not affect the display lifecycle. Previews
+are read-only; double-clicking a cell opens an interactive expando window
+that forwards mouse and keyboard into the display via XTEST
+(see `docs/interactive-preview.md`).
 
 ### 6.2 Window Manager
 
@@ -295,7 +298,7 @@ All tools are prefixed with `lxh_`.
 
 | Tool | Purpose | Required args |
 |------|---------|---------------|
-| `lxh_display_create` | Create display | — |
+| `lxh_display_create` | Create display (optional `name` labels the preview; `persistent` survives the session) | — |
 | `lxh_display_attach` | Attach to an existing display (e.g. `:0`) | `display_id` |
 | `lxh_display_detach` | Detach from an existing display without destroying it | `display_id` |
 | `lxh_display_destroy` | Destroy display | `display_id` |
@@ -304,15 +307,19 @@ All tools are prefixed with `lxh_`.
 | `lxh_preview_close` | Close the preview window without touching the display | `display_id` |
 | `lxh_app_launch` | Launch an application | `display_id`, `command` |
 | `lxh_app_terminate` | Terminate by PID | `display_id`, `pid` |
+| `lxh_list_apps` | Installed desktop entries merged with running processes | — |
+| `lxh_list_user_windows` | Windows on the user's default desktop (`:0`) — the routing check before creating a display | optional `name` |
 | `lxh_input_click` | Click at `(x, y)` with optional button/count | `display_id`, `x`, `y`, `button`, `count` |
 | `lxh_input_move` | Move cursor | `display_id`, `x`, `y` |
 | `lxh_input_scroll` | Scroll | `display_id` |
 | `lxh_input_drag` | Drag from `(x1, y1)` to `(x2, y2)` | `display_id`, `x1`, `y1`, `x2`, `y2` |
 | `lxh_input_get_cursor_position` | Get current mouse position | `display_id` |
-| `lxh_input_type` | Type text | `display_id`, `text` |
+| `lxh_input_type` | Type text (optional `pid` for AT-SPI write fallback) | `display_id`, `text` |
 | `lxh_input_key` | Press key or combo | `display_id`, `key` |
-| `lxh_capture_screenshot` | Full screenshot | `display_id` |
-| `lxh_capture_window` | Screenshot a specific window | `display_id`, `window_id` |
+| `lxh_hover` | Move the mouse and hold, returning the hovered window's screenshot | `display_id`, `x`, `y` |
+| `lxh_capture_window` | Screenshot a window as PNG (optional `save_to` writes a file) | `display_id`, `window_id` |
+| `lxh_zoom` | Cropped, scaled capture with `from_zoom` coordinate mapping | `display_id`, `window_id`, `x1`, `y1`, `x2`, `y2` |
+| `lxh_ocr` | Read text from an image with a local OCR engine (tesseract / rapidocr) | `image_path` |
 | `lxh_window_focus` | Focus window by id | `display_id`, `window_id` |
 | `lxh_window_set_frame` | Set window position and size | `display_id`, `window_id`, `x`, `y`, `width`, `height` |
 | `lxh_window_close` | Close window by id | `display_id`, `window_id` |
@@ -320,8 +327,10 @@ All tools are prefixed with `lxh_`.
 | `lxh_clipboard_set` | Set clipboard text | `display_id`, `text` |
 | `lxh_get_desktop_overview` | Desktop overview: processes and windows | `display_id` |
 | `lxh_get_window_state` | Window metadata + optional tree + optional screenshot | `display_id`, `pid`, `window_id` |
+| `lxh_verify_state` | Single-sample state assertions with per-predicate results | `display_id`, `expect` |
 | `lxh_set_value` | Set AT-SPI editable element value | `display_id`, `pid`, `index`, `value` |
 | `lxh_click_element` | Click an AT-SPI element by pid and index | `display_id`, `pid`, `index`, `button` |
+| `lxh_invoke_menu` | Resolve and invoke a menu path through AT-SPI | `display_id`, `pid`, `path` |
 | `lxh_wait` | Wait for milliseconds | `ms` |
 
 
