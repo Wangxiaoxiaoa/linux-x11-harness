@@ -5,6 +5,7 @@
 //! This is the only file that knows about both cells and the container; the
 //! public API mirrors what the daemon needs: `open`, `close`.
 
+use std::collections::HashMap;
 use std::sync::mpsc;
 use std::sync::{Arc, Mutex};
 use std::thread;
@@ -15,7 +16,6 @@ use x11rb::rust_connection::RustConnection;
 
 use crate::cell::{CellChrome, CellEvent, CellRect, PreviewCell};
 use crate::container::{ContainerEvent, ContainerState, PreviewContainer};
-use crate::expando::{ExpandoEvent, ExpandoHandle};
 use crate::geometry::ScreenMetrics;
 use crate::layout::{
     cell_slots, panel_layout, total_pages, visible_count, CellSlot, PAGE_CAPACITY,
@@ -31,7 +31,7 @@ const PANEL_TITLE: &str = "LXH Previews";
 struct CellEntry {
     display_id: String,
     cell: PreviewCell,
-    /// Target display string (e.g. ":142"), needed to open the expando.
+    /// Target display string (e.g. ":142").
     target_display: String,
     /// Title shown by the cell (and reused by the expando).
     title: String,
@@ -45,10 +45,9 @@ struct PanelInner {
     container: Option<PreviewContainer>,
     cells: Vec<CellEntry>,
     page: usize,
-    /// The open interactive expando, if any: (display_id, handle).
-    expando: Option<(String, ExpandoHandle)>,
-    /// Sender the expando reports its closure on.
-    expando_tx: mpsc::Sender<ExpandoEvent>,
+    /// display_id -> x11vnc RFB port (set by the daemon when it spawns
+    /// the VNC server for a display).
+    vnc_ports: HashMap<String, u16>,
     /// Set when the container died (user display gone); stops re-layout.
     broken: bool,
 }
@@ -70,14 +69,12 @@ impl PreviewPanel {
     pub fn new() -> Self {
         let (cell_tx, cell_rx) = mpsc::channel::<CellEvent>();
         let (container_tx, container_rx) = mpsc::channel::<ContainerEvent>();
-        let (expando_tx, expando_rx) = mpsc::channel::<ExpandoEvent>();
         let inner = Arc::new(Mutex::new(PanelInner {
             metrics: None,
             container: None,
             cells: Vec::new(),
             page: 0,
-            expando: None,
-            expando_tx: expando_tx.clone(),
+            vnc_ports: HashMap::new(),
             broken: false,
         }));
 
@@ -97,14 +94,6 @@ impl PreviewPanel {
                 while let Ok(event) = container_rx.try_recv() {
                     handle_container_event(&mut guard, event);
                     dirty = true;
-                }
-                while let Ok(ExpandoEvent::Closed) = expando_rx.try_recv() {
-                    // A dead expando reported closure. Drop our handle only
-                    // if it is the dead one (a replacement started meanwhile
-                    // is still alive).
-                    if guard.expando.as_ref().is_some_and(|(_, h)| !h.is_alive()) {
-                        guard.expando = None;
-                    }
                 }
                 if dirty {
                     reflow(&mut guard);
@@ -229,6 +218,21 @@ impl PreviewPanel {
         Ok(())
     }
 
+    /// Record the x11vnc RFB port for a display so the panel's
+    /// double-click action can launch a VNC client against it.
+    pub fn set_vnc_port(&self, display_id: &str, port: u16) {
+        self.inner
+            .lock()
+            .unwrap()
+            .vnc_ports
+            .insert(display_id.to_string(), port);
+    }
+
+    /// Forget the VNC port of a destroyed display.
+    pub fn remove_vnc_port(&self, display_id: &str) {
+        self.inner.lock().unwrap().vnc_ports.remove(display_id);
+    }
+
     /// Close the preview for `display_id`, if open.
     pub fn close(&self, display_id: &str) {
         let mut inner = self.inner.lock().unwrap();
@@ -243,9 +247,6 @@ impl PreviewPanel {
 impl Drop for PreviewPanel {
     fn drop(&mut self) {
         let mut inner = self.inner.lock().unwrap();
-        if let Some((_, handle)) = inner.expando.take() {
-            handle.stop();
-        }
         for entry in inner.cells.drain(..) {
             entry.cell.stop();
         }
@@ -257,34 +258,19 @@ impl Drop for PreviewPanel {
 
 fn handle_cell_event(inner: &mut PanelInner, event: CellEvent) {
     match &event {
-        CellEvent::Expanded { display_id } => toggle_expando(inner, display_id),
+        CellEvent::Expanded { display_id } => toggle_vnc(inner, display_id),
         CellEvent::Closed { display_id } | CellEvent::DisplayGone { display_id } => {
             if let Some(pos) = inner.cells.iter().position(|c| c.display_id == *display_id) {
                 let entry = inner.cells.remove(pos);
                 entry.cell.stop();
             }
-            // If the expando mirrored this display, close it too.
-            if inner
-                .expando
-                .as_ref()
-                .is_some_and(|(id, _)| id == display_id)
-            {
-                if let Some((_, handle)) = inner.expando.take() {
-                    handle.stop();
-                }
-            }
         }
     }
 }
 
-/// Double-click toggle: same display -> close; other/none -> (re)open.
-fn toggle_expando(inner: &mut PanelInner, display_id: &str) {
-    if let Some((current, handle)) = inner.expando.take() {
-        handle.stop();
-        if current == display_id {
-            return; // toggle closed
-        }
-    }
+/// Double-click: launch the system VNC client against this display's
+/// x11vnc server. The VNC session replaces the expando window.
+fn toggle_vnc(inner: &mut PanelInner, display_id: &str) {
     let Some(entry) = inner
         .cells
         .iter()
@@ -293,10 +279,17 @@ fn toggle_expando(inner: &mut PanelInner, display_id: &str) {
     else {
         return;
     };
-    let (target_display, title) = entry;
-    match ExpandoHandle::start(&target_display, &title, inner.expando_tx.clone()) {
-        Ok(handle) => inner.expando = Some((display_id.to_string(), handle)),
-        Err(e) => eprintln!("preview expando unavailable for {display_id}: {e}"),
+    let (target_display, _title) = entry;
+    // The daemon's x11vnc child serves this display on its RFB port; the
+    // panel asks it (via the cell event channel) to open the client.
+    // MVP: launch vncviewer against the recorded port.
+    if let Some(port) = inner.vnc_ports.get(display_id) {
+        let _ = std::process::Command::new("vncviewer")
+            .arg(format!("localhost:{port}"))
+            .stdout(std::process::Stdio::null())
+            .stderr(std::process::Stdio::null())
+            .spawn();
+        let _ = target_display;
     }
 }
 

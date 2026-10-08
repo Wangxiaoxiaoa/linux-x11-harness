@@ -22,6 +22,7 @@ pub struct DaemonState {
     pub runtime: Arc<Runtime>,
     pub displays: Arc<RwLock<HashMap<String, Arc<Mutex<Display>>>>>,
     pub drivers: Arc<RwLock<HashMap<String, Arc<dyn Driver>>>>,
+    pub vnc: Arc<crate::vnc::VncRegistry>,
     pub previews: Arc<PreviewPanel>,
     /// Last zoom context per display, for `from_zoom` coordinate
     /// translation in the coordinate-taking input tools.
@@ -96,7 +97,8 @@ pub async fn create_display(
     if !args.persistent {
         session.owned_displays.insert(id.clone());
     }
-    state.runtime.clipboard().start_spoke(&display_str);
+    let rfb_port = state.vnc.start(&display_str).await?;
+    state.previews.set_vnc_port(&id, rfb_port);
 
     Ok(json!({ "display_id": id, "display": display_str }))
 }
@@ -133,7 +135,7 @@ pub async fn destroy_display(
     state.displays.write().await.remove(&args.display_id);
     state.drivers.write().await.remove(&args.display_id);
     state.zooms.lock().unwrap().remove(&args.display_id);
-    state.runtime.clipboard().stop(&display_str);
+    state.vnc.stop(&display_str).await;
     session.owned_displays.remove(&args.display_id);
 
     Ok(json!({ "success": true }))

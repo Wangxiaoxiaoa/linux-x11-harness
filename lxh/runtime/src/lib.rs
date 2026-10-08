@@ -13,6 +13,7 @@ pub mod wm;
 pub mod xserver;
 
 pub use display::{Display, DisplayConfig, DisplayKind};
+pub use process::ManagedProcess;
 
 fn process_scoped_display_start() -> u32 {
     // Use the process id so that concurrent daemon instances do not collide

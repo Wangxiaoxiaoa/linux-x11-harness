@@ -25,6 +25,7 @@ impl DaemonServer {
                 runtime,
                 displays: Arc::new(RwLock::new(HashMap::new())),
                 drivers: Arc::new(RwLock::new(HashMap::new())),
+                vnc: Arc::new(crate::vnc::VncRegistry::new()),
                 previews: Arc::new(PreviewPanel::new()),
                 zooms: Arc::new(std::sync::Mutex::new(HashMap::new())),
             }),
@@ -65,6 +66,7 @@ impl DaemonServer {
         self.state.drivers.write().await.clear();
         self.state.zooms.lock().unwrap().clear();
         self.state.runtime.clipboard().stop_all();
+        self.state.vnc.stop_all().await;
     }
 }
 
