@@ -37,7 +37,8 @@ jobs:
         run: |
           MAX=$(objdump -T target/release/linux-x11-harness \
             | grep -oE 'GLIBC_[0-9.]+' | sort -uV | tail -1 | cut -d_ -f2)
-          echo "binary requires glibc >= $MAX"
+          MAX=${MAX//./_}   # GLIBC_2.34 -> manylinux_2_34 (PEP 600 uses underscores)
+          echo "binary requires glibc >= ${MAX//_/.}"
           # Plain rename: the 'wheel tags' CLI mangles the platform tag when
           # reassembling the filename.
           for f in dist/*.whl; do
