@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "linux-x11-harness"
-version = "0.1.0"
+version = "0.1.1"
 description = "Linux X11 GUI harness with MCP server and native automation driver"
 readme = "README.md"
 license = { text = "MIT" }

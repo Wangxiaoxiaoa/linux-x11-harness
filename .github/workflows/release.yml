@@ -38,7 +38,13 @@ jobs:
           MAX=$(objdump -T target/release/linux-x11-harness \
             | grep -oE 'GLIBC_[0-9.]+' | sort -uV | tail -1 | cut -d_ -f2)
           echo "binary requires glibc >= $MAX"
-          python -m wheel tags --platform-tag "manylinux_${MAX}_x86_64" --remove dist/*.whl
+          # Plain rename: the 'wheel tags' CLI mangles the platform tag when
+          # reassembling the filename.
+          for f in dist/*.whl; do
+            base=$(basename "$f")
+            mv "dist/$base" "dist/${base/linux_x86_64/manylinux_${MAX}_x86_64}"
+          done
+          ls dist/
 
       - name: Bundle standalone binary
         run: |
