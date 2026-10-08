@@ -55,17 +55,6 @@ linux-x11-harness setup
 
 其他兼容 MCP 的智能体可以手动通过 `linux-x11-harness mcp` 连接。
 
-## 手动命令
-
-日常使用无需执行以下命令。它们主要用于调试或不通过智能体直接运行：
-
-```bash
-linux-x11-harness serve   # 启动守护进程
-linux-x11-harness mcp     # 运行 MCP stdio 代理
-linux-x11-harness status  # 查看守护进程状态
-linux-x11-harness stop    # 停止守护进程
-```
-
 ## 文档
 
 - [使用指南](docs/usage.md) — 显示预览、socket 与多智能体隔离。

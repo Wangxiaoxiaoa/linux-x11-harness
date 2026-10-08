@@ -62,17 +62,6 @@ Requirements: Python 3.10+, Rust toolchain, Linux with `xvfb` and `openbox`.
 
 Other MCP-compatible agents can connect manually with `linux-x11-harness mcp`.
 
-## Manual commands
-
-You normally do not need to run these. They are useful for debugging or running without an agent:
-
-```bash
-linux-x11-harness serve   # start the daemon
-linux-x11-harness mcp     # run the MCP stdio proxy
-linux-x11-harness status  # check daemon status
-linux-x11-harness stop    # stop the daemon
-```
-
 ## Documentation
 
 - [Usage guide](docs/usage.md) — display previews, sockets, and multi-agent isolation.
