@@ -141,18 +141,21 @@ def _register_pi() -> None:
     _link_skill(home / ".pi" / "agent" / "skills")
 
 
+# (apt package name, binary name to check with shutil.which)
 _REQUIRED_SYSTEM_PACKAGES = [
-    "xvfb",
-    "openbox",
-    "x11vnc",
-    "tigervnc-viewer",
-    "x11-utils",
+    ("xvfb", "Xvfb"),
+    ("openbox", "openbox"),
+    ("x11vnc", "x11vnc"),
+    ("tigervnc-viewer", "vncviewer"),
+    ("x11-utils", "xdpyinfo"),
 ]
 
 
 def _check_system_deps() -> None:
     """Check and install required system packages via apt."""
-    missing = [pkg for pkg in _REQUIRED_SYSTEM_PACKAGES if not shutil.which(pkg)]
+    missing = [
+        pkg for pkg, binary in _REQUIRED_SYSTEM_PACKAGES if not shutil.which(binary)
+    ]
 
     if not missing:
         _log("All system dependencies present")
