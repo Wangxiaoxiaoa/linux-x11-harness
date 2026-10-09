@@ -146,8 +146,20 @@ impl ClipboardHub {
 
     /// Replace the shared content; every spoke pushes it to its display,
     /// including the desktop.
+    /// Replace the shared content (agent path): always bumps the version so
+    /// the desktop spoke pushes to the user's clipboard, even if the text
+    /// hasn't changed (the agent explicitly confirms the content).
     pub fn set(&self, text: &str) {
-        self.set_if_changed(text.to_string(), Origin::Agent);
+        let text = truncate(text.to_string());
+        let fp = fingerprint(&text);
+        let mut inner = self.inner.lock().unwrap();
+        inner.canonical = Canonical {
+            text,
+            fp,
+            version: inner.canonical.version + 1,
+            origin: Origin::Agent,
+        };
+        self.changed.notify_all();
     }
 
     /// Block until canonical changes or the timeout elapses.
