@@ -141,8 +141,42 @@ def _register_pi() -> None:
     _link_skill(home / ".pi" / "agent" / "skills")
 
 
+_REQUIRED_SYSTEM_PACKAGES = [
+    "xvfb",
+    "openbox",
+    "x11vnc",
+    "tigervnc-viewer",
+    "x11-utils",
+]
+
+
+def _check_system_deps() -> None:
+    """Check and install required system packages via apt."""
+    missing = [pkg for pkg in _REQUIRED_SYSTEM_PACKAGES if not shutil.which(pkg)]
+
+    if not missing:
+        _log("All system dependencies present")
+        return
+
+    _warn(f"Missing system packages: {', '.join(missing)}")
+
+    if not shutil.which("apt-get"):
+        _err("Please install manually: sudo apt install " + " ".join(missing))
+        sys.exit(1)
+
+    _log(f"Installing: sudo apt install {' '.join(missing)}")
+    result = _run(["sudo", "apt-get", "install", "-y", *missing])
+    if result.returncode != 0:
+        _err(f"Failed to install system packages: {result.stderr}")
+        sys.exit(1)
+
+    _log("System dependencies installed")
+
+
 def setup_agents() -> None:
-    """Detect common agents and register the skill + MCP server."""
+    """Detect common agents, install system deps, register skill + MCP server."""
+    _check_system_deps()
+
     command = _resolve_command()
     _log(f"Using MCP command: {command}")
 
