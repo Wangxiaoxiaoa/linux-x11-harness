@@ -3,13 +3,10 @@
 //! interactive remote view of the sandbox in any VNC client.
 
 use std::collections::HashMap;
-use std::sync::Arc;
 
 use tokio::sync::Mutex;
 
 use lxh_runtime::ManagedProcess;
-
-use crate::handlers::DaemonState;
 
 /// RFB port range: 5900 + K, K >= 1 (5900 itself is often taken by a
 /// system VNC server).
@@ -97,9 +94,4 @@ impl VncRegistry {
             "no free RFB port in 5901-5999".into(),
         ))
     }
-}
-
-/// Convenience: the registry lives on DaemonState.
-pub fn registry(state: &DaemonState) -> &Arc<VncRegistry> {
-    &state.vnc
 }

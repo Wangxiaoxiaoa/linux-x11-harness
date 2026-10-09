@@ -9,6 +9,7 @@ use uuid::Uuid;
 pub mod clipboard;
 pub mod display;
 pub mod process;
+pub mod rfb;
 pub mod wm;
 pub mod xserver;
 

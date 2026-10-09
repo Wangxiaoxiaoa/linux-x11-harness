@@ -31,10 +31,6 @@ const PANEL_TITLE: &str = "LXH Previews";
 struct CellEntry {
     display_id: String,
     cell: PreviewCell,
-    /// Target display string (e.g. ":142").
-    target_display: String,
-    /// Title shown by the cell (and reused by the expando).
-    title: String,
     /// Fitted content size for the cell (from the target display's
     /// resolution), used by the layout.
     size: (u32, u32),
@@ -209,8 +205,6 @@ impl PreviewPanel {
         inner.cells.push(CellEntry {
             display_id: display_id.to_string(),
             cell,
-            target_display: target_display.to_string(),
-            title: cell_title,
             size: fitted,
         });
         inner.page = page;
@@ -271,26 +265,33 @@ fn handle_cell_event(inner: &mut PanelInner, event: CellEvent) {
 /// Double-click: launch the system VNC client against this display's
 /// x11vnc server. The VNC session replaces the expando window.
 fn toggle_vnc(inner: &mut PanelInner, display_id: &str) {
-    let Some(entry) = inner
-        .cells
-        .iter()
-        .find(|c| c.display_id == display_id)
-        .map(|c| (c.target_display.clone(), c.title.clone()))
-    else {
+    let Some(port) = inner.vnc_ports.get(display_id).copied() else {
         return;
     };
-    let (target_display, _title) = entry;
-    // The daemon's x11vnc child serves this display on its RFB port; the
-    // panel asks it (via the cell event channel) to open the client.
-    // MVP: launch vncviewer against the recorded port.
-    if let Some(port) = inner.vnc_ports.get(display_id) {
-        let _ = std::process::Command::new("vncviewer")
-            .arg(format!("localhost:{port}"))
-            .stdout(std::process::Stdio::null())
-            .stderr(std::process::Stdio::null())
-            .spawn();
-        let _ = target_display;
-    }
+
+    // Screen-relative geometry: all values derived from the actual screen
+    // resolution so they work at any display size. Docked to the top-left
+    // corner (the preview panel occupies the top-right).
+    let (screen_w, screen_h) = user_screen_size();
+    let w = screen_w * 6 / 10;
+    let h = screen_h * 5 / 10;
+    let x = 8i32;
+    let y = 8i32;
+    let geometry = format!("{w}x{h}+{x}+{y}");
+
+    let _ = std::process::Command::new("vncviewer")
+        .args(["-geometry", &geometry])
+        .arg(format!("localhost:{port}"))
+        .stdout(std::process::Stdio::null())
+        .stderr(std::process::Stdio::null())
+        .spawn();
+}
+
+/// User's screen dimensions (resolution-independent geometry source).
+fn user_screen_size() -> (u32, u32) {
+    crate::x11::connect_user()
+        .map(|(conn, screen)| crate::x11::root_size(&conn, screen))
+        .unwrap_or((1920, 1080))
 }
 
 fn handle_container_event(inner: &mut PanelInner, event: ContainerEvent) {
