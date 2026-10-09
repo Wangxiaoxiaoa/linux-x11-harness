@@ -62,6 +62,18 @@ impl Runtime {
     }
 
     pub async fn attach_display(&self, display: &str) -> Result<Display, LxhError> {
+        // x11rb computes the TCP port as 6000 + display in u16; a display
+        // number above 59535 overflows there (panic in debug, silent wrap in
+        // release), so reject it up front with a clear error.
+        let num: u32 = display
+            .strip_prefix(':')
+            .and_then(|s| s.parse().ok())
+            .ok_or_else(|| LxhError::InvalidArgument(format!("invalid display: {display}")))?;
+        if num > 59_535 {
+            return Err(LxhError::InvalidArgument(format!(
+                "display number {num} exceeds the maximum 59535"
+            )));
+        }
         self.ensure_desktop_spoke();
         let id = display.to_string();
         Display::attach(id, display.to_string()).await
