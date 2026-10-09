@@ -298,7 +298,8 @@ All tools are prefixed with `lxh_`.
 
 | Tool | Purpose | Required args |
 |------|---------|---------------|
-| `lxh_display_create` | Create display (optional `name` labels the preview; `persistent` survives the session) | — |
+| `lxh_display_create` | Create display (optional `name` labels the preview) | — |
+| `lxh_list_displays` | List all displays (they survive client disconnects) | — |
 | `lxh_display_attach` | Attach to an existing display (e.g. `:0`) | `display_id` |
 | `lxh_display_detach` | Detach from an existing display without destroying it | `display_id` |
 | `lxh_display_destroy` | Destroy display | `display_id` |

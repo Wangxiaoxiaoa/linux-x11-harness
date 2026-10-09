@@ -47,11 +47,10 @@ impl DaemonServer {
             tokio::spawn(async move {
                 let mut session = ClientSession::new();
                 session.client_name = peer_name(&stream);
-                let state2 = Arc::clone(&state);
                 if let Err(e) = handle_client(state, &mut session, stream).await {
                     eprintln!("client handler error: {e}");
                 }
-                cleanup_session(state2, &mut session).await;
+                // Displays outlive sessions by design; nothing to clean up.
             });
         }
     }
@@ -171,7 +170,8 @@ async fn dispatch_tool_call(
     let args = &params["arguments"];
     match name {
         "lxh_display_create" => handlers::create_display(state, session, args).await,
-        "lxh_display_destroy" => handlers::destroy_display(state, session, args).await,
+        "lxh_display_destroy" => handlers::destroy_display(state, args).await,
+        "lxh_list_displays" => handlers::list_displays(state).await,
         "lxh_display_attach" => handlers::attach_display(state, args).await,
         "lxh_display_detach" => handlers::detach_display(state, args).await,
         "lxh_app_launch" => handlers::app_launch(state, args).await,
@@ -205,26 +205,6 @@ async fn dispatch_tool_call(
         "lxh_list_user_windows" => handlers::list_user_windows(state, args).await,
         "lxh_set_value" => handlers::set_value(state, args).await,
         _ => Err(LxhError::InvalidArgument(format!("unknown tool: {name}"))),
-    }
-}
-
-async fn cleanup_session(state: Arc<DaemonState>, session: &mut ClientSession) {
-    for id in session.owned_displays.drain() {
-        state.previews.close(&id);
-        // Short critical sections: remove from each map, then run the slow
-        // process kills without holding any map lock.
-        // owned_displays ids are always registered in the displays map.
-        let display = state
-            .displays
-            .write()
-            .await
-            .remove(&id)
-            .expect("owned display registered");
-        let display_str = display.lock().await.display().to_string();
-        let _ = display.lock().await.destroy().await;
-        state.drivers.write().await.remove(&id);
-        state.zooms.lock().unwrap().remove(&id);
-        state.runtime.clipboard().stop(&display_str);
     }
 }
 

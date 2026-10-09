@@ -34,23 +34,29 @@ launching GUI apps.
 
   ```bash
   LXH_SOCKET_PATH=/tmp/lxh-opencode.sock \
-    python3 <this-directory>/lxh.py lxh_display_create '{"persistent": true}'
+    python3 <this-directory>/lxh.py lxh_display_create '{}'
   ```
 
   Never start your own Xvfb — always go through the daemon.
 
 ## Lifecycle
 
-1. `lxh_display_create` — creates the display and the preview panel.
-2. `lxh_app_launch` — start the app (returns pid).
-3. `lxh_wait` / `lxh_get_desktop_overview` — wait for the window; the
+Displays outlive client sessions — a dropped connection never destroys
+them. Start a new session with `lxh_list_displays` to rediscover what
+exists, attach with `lxh_display_attach` (pass the `display` field, e.g.
+`:18648`), and clean up with `lxh_display_destroy` when done.
+
+1. `lxh_list_displays` — see what already exists (skip create if reusable).
+2. `lxh_display_create` — creates the display and the preview panel.
+3. `lxh_app_launch` — start the app (returns pid).
+4. `lxh_wait` / `lxh_get_desktop_overview` — wait for the window; the
    overview gives `window_id`, bounds and z-order (zombie windows are
    filtered).
-4. Automate: `lxh_input_click/type/key`, `lxh_click_element` (AT-SPI
+5. Automate: `lxh_input_click/type/key`, `lxh_click_element` (AT-SPI
    doAction), `lxh_set_value`, `lxh_invoke_menu`, `lxh_verify_state`.
-5. `lxh_capture_window` / `lxh_zoom` — screenshots (display-absolute
+6. `lxh_capture_window` / `lxh_zoom` — screenshots (display-absolute
    coordinates; `window_id` identifies, not transforms).
-6. `lxh_app_terminate` + `lxh_display_destroy` — clean up.
+7. `lxh_app_terminate` + `lxh_display_destroy` — clean up.
 
 ## Reading screen text without vision
 

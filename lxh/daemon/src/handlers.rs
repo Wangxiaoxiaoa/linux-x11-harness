@@ -1,4 +1,4 @@
-use std::collections::{HashMap, HashSet};
+use std::collections::HashMap;
 use std::sync::Arc;
 
 use crate::tools::{
@@ -40,7 +40,6 @@ pub struct ZoomContext {
 }
 
 pub struct ClientSession {
-    pub owned_displays: HashSet<String>,
     pub client_name: Option<String>,
 }
 
@@ -52,10 +51,7 @@ impl Default for ClientSession {
 
 impl ClientSession {
     pub fn new() -> Self {
-        Self {
-            owned_displays: HashSet::new(),
-            client_name: None,
-        }
+        Self { client_name: None }
     }
 }
 
@@ -69,7 +65,7 @@ fn parse_button(b: Option<crate::tools::ButtonArg>) -> Result<MouseButton, LxhEr
 
 pub async fn create_display(
     state: &DaemonState,
-    session: &mut ClientSession,
+    session: &ClientSession,
     args: &Value,
 ) -> Result<Value, LxhError> {
     let args: DisplayCreateArgs = parse_args(args)?;
@@ -94,9 +90,6 @@ pub async fn create_display(
         .await
         .insert(id.clone(), Arc::new(Mutex::new(display)));
     state.drivers.write().await.insert(id.clone(), driver);
-    if !args.persistent {
-        session.owned_displays.insert(id.clone());
-    }
     let rfb_port = state.vnc.start(&display_str).await?;
     state.previews.set_vnc_port(&id, rfb_port);
 
@@ -121,11 +114,7 @@ pub async fn attach_display(state: &DaemonState, args: &Value) -> Result<Value, 
     Ok(json!({ "display_id": id, "display": display_str }))
 }
 
-pub async fn destroy_display(
-    state: &DaemonState,
-    session: &mut ClientSession,
-    args: &Value,
-) -> Result<Value, LxhError> {
+pub async fn destroy_display(state: &DaemonState, args: &Value) -> Result<Value, LxhError> {
     let args: DisplayIdArgs = parse_args(args)?;
     let display = find_display(state, &args.display_id).await?;
     let display_str = display.lock().await.display().to_string();
@@ -136,9 +125,25 @@ pub async fn destroy_display(
     state.drivers.write().await.remove(&args.display_id);
     state.zooms.lock().unwrap().remove(&args.display_id);
     state.vnc.stop(&display_str).await;
-    session.owned_displays.remove(&args.display_id);
+    state.runtime.clipboard().stop(&display_str);
 
     Ok(json!({ "success": true }))
+}
+
+pub async fn list_displays(state: &DaemonState) -> Result<Value, LxhError> {
+    let displays = state.displays.read().await;
+    let mut list = Vec::new();
+    for (id, display) in displays.iter() {
+        let info = display.lock().await.info();
+        list.push(json!({
+            "display_id": id,
+            "display": info.display,
+            "width": info.width,
+            "height": info.height,
+            "app_count": info.app_count,
+        }));
+    }
+    Ok(json!({ "displays": list, "count": list.len() }))
 }
 
 pub async fn preview_open(

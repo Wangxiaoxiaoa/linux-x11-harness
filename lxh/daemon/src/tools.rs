@@ -14,12 +14,13 @@ pub enum ButtonArg {
 #[derive(Debug, Deserialize, JsonSchema)]
 pub struct DisplayCreateArgs {
     #[serde(default)]
-    pub persistent: bool,
-    #[serde(default)]
     pub preview: Option<bool>,
     #[serde(default)]
     pub name: Option<String>,
 }
+
+#[derive(Debug, Deserialize, JsonSchema)]
+pub struct ListDisplaysArgs {}
 
 #[derive(Debug, Deserialize, JsonSchema)]
 pub struct DisplayIdArgs {
@@ -394,6 +395,15 @@ pub fn tool_definitions() -> Vec<Value> {
             root_schema::<DisplayIdArgs>(),
         ),
         tool_def(
+            "lxh_list_displays",
+            "List all harness displays. Each entry includes display_id, display \
+             number, size and running app count. Displays survive client \
+             disconnects, so call this first in a new session to rediscover \
+             displays created earlier; attach with lxh_display_attach using \
+             the display field (e.g. :18648).",
+            root_schema::<ListDisplaysArgs>(),
+        ),
+        tool_def(
             "lxh_display_attach",
             "Attach to an existing X11 display (e.g. :0)",
             root_schema::<DisplayIdArgs>(),
@@ -608,10 +618,11 @@ mod tests {
     #[test]
     fn tool_definitions_has_expected_tools() {
         let defs = tool_definitions();
-        assert_eq!(defs.len(), 34, "expected 34 tool definitions");
+        assert_eq!(defs.len(), 35, "expected 35 tool definitions");
 
         let names: Vec<&str> = defs.iter().map(|d| d["name"].as_str().unwrap()).collect();
         assert!(names.contains(&"lxh_display_create"));
+        assert!(names.contains(&"lxh_list_displays"));
         assert!(names.contains(&"lxh_list_apps"));
         assert!(names.contains(&"lxh_list_user_windows"));
         assert!(names.contains(&"lxh_zoom"));
@@ -641,12 +652,14 @@ mod tests {
 
     #[test]
     fn parse_display_create_args() {
-        let args = json!({"persistent": true});
+        let args = json!({"preview": false, "name": "demo"});
         let parsed = parse_args::<DisplayCreateArgs>(&args).unwrap();
-        assert!(parsed.persistent);
+        assert_eq!(parsed.preview, Some(false));
+        assert_eq!(parsed.name.as_deref(), Some("demo"));
 
         let default = parse_args::<DisplayCreateArgs>(&json!({})).unwrap();
-        assert!(!default.persistent);
+        assert_eq!(default.preview, None);
+        assert_eq!(default.name, None);
     }
 
     #[test]

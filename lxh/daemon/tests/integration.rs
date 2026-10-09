@@ -370,7 +370,7 @@ async fn tools_list_returns_all_tools() {
     let mut conn = daemon.connect().await;
     let resp = conn.call_method("tools/list", json!({})).await;
     let tools = resp["result"]["tools"].as_array().expect("tools array");
-    assert_eq!(tools.len(), 34, "expected 34 tools");
+    assert_eq!(tools.len(), 35, "expected 35 tools");
 
     for tool in tools {
         assert!(tool["name"].is_string(), "tool missing name: {tool}");
@@ -829,22 +829,26 @@ async fn window_lifecycle_focus_set_frame_close() {
 }
 
 #[tokio::test]
-async fn persistent_display_survives_client_disconnect() {
+async fn display_survives_client_disconnect() {
     let daemon = DaemonGuard::new().await;
     let mut conn = daemon.connect().await;
     let create = conn
-        .call_tool(
-            "lxh_display_create",
-            json!({"persistent": true, "preview": false}),
-        )
+        .call_tool("lxh_display_create", json!({"preview": false}))
         .await;
     let display_id = create["result"]["display_id"].as_str().unwrap().to_string();
 
     // Drop the first connection.
     drop(conn);
 
-    // Reconnect to the same daemon and verify the display is still there.
+    // Reconnect to the same daemon: the display is still there and is
+    // discoverable through lxh_list_displays.
     let mut conn2 = daemon.connect().await;
+    let list = conn2.call_tool("lxh_list_displays", json!({})).await;
+    let entries = list["result"]["displays"].as_array().unwrap();
+    assert_eq!(entries.len(), 1, "exactly one display after reconnect");
+    assert_eq!(entries[0]["display_id"].as_str(), Some(display_id.as_str()));
+    assert_eq!(entries[0]["app_count"].as_u64(), Some(0));
+
     let info = conn2
         .call_tool("lxh_display_info", json!({"display_id": display_id}))
         .await;
