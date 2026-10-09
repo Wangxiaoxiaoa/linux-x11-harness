@@ -74,8 +74,8 @@ impl PreviewPanel {
             broken: false,
         }));
 
-        // Background loop: consume cell/container/expando events and
-        // re-layout. Cells, the container and the expando report through
+        // Background loop: consume cell/container events and re-layout.
+        // Cells and the container report through
         // three channels; all are polled here (all preview paths are
         // polling-based already).
         let inner2 = Arc::clone(&inner);

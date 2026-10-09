@@ -51,7 +51,7 @@ pub(crate) enum CellEvent {
     Closed { display_id: String },
     /// The target display's X connection broke.
     DisplayGone { display_id: String },
-    /// The user double-clicked the cell: open the interactive expando.
+    /// The user double-clicked the cell: open the interactive viewer.
     Expanded { display_id: String },
 }
 
@@ -555,7 +555,7 @@ impl Cell {
 }
 
 /// Scale a 24-bit ZPixmap (BGRA) to the target size. Shared with the
-/// expando, which renders the same captures at a larger window size.
+/// VNC client, which renders the same captures at a larger window size.
 pub(crate) fn scale(
     bgra: &[u8],
     src_w: u32,
