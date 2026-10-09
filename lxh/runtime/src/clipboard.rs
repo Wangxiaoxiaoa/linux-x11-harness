@@ -366,8 +366,13 @@ fn run_spoke(hub: Arc<ClipboardHub>, display: String, desktop: bool, stop: Arc<A
                 // already lives on this display, so no re-grab is needed.
                 Event::SelectionClear(clear) if clear.selection == atoms.clipboard => {
                     owned = false;
+                    let origin = if desktop {
+                        Origin::Desktop
+                    } else {
+                        Origin::Sandbox
+                    };
                     if let Some(local) = read_display_clipboard(&display) {
-                        if hub.set_if_changed(local, Origin::Sandbox) {
+                        if hub.set_if_changed(local, origin) {
                             served = hub.version();
                         }
                     }
@@ -381,8 +386,13 @@ fn run_spoke(hub: Arc<ClipboardHub>, display: String, desktop: bool, stop: Arc<A
         // DID own it. One read per second covers that gap.
         if !owned && last_poll.elapsed() >= LOCAL_POLL {
             last_poll = Instant::now();
+            let origin = if desktop {
+                Origin::Desktop
+            } else {
+                Origin::Sandbox
+            };
             if let Some(local) = read_display_clipboard(&display) {
-                if hub.set_if_changed(local, Origin::Sandbox) {
+                if hub.set_if_changed(local, origin) {
                     served = hub.version();
                     // The content is already on this display; serving it
                     // needs no ownership change.
