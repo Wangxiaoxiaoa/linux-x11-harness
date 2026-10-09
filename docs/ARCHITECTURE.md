@@ -280,9 +280,8 @@ lxh-runtime/
 The `XvfbBackend` is implemented in `lxh-runtime`. Each harness display is a
 headless Xvfb server; user-visible output is provided by a separate preview
 panel (`lxh-preview`) that does not affect the display lifecycle. Previews
-are read-only; double-clicking a cell opens an interactive expando window
-that forwards mouse and keyboard into the display via XTEST
-(see `docs/interactive-preview.md`).
+are read-only; double-clicking a cell opens a VNC viewer window connected
+to the display's x11vnc server (see `docs/vnc-streaming.md`).
 
 ### 6.2 Window Manager
 
