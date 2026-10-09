@@ -222,11 +222,6 @@ impl PreviewPanel {
             .insert(display_id.to_string(), port);
     }
 
-    /// Forget the VNC port of a destroyed display.
-    pub fn remove_vnc_port(&self, display_id: &str) {
-        self.inner.lock().unwrap().vnc_ports.remove(display_id);
-    }
-
     /// Close the preview for `display_id`, if open.
     pub fn close(&self, display_id: &str) {
         let mut inner = self.inner.lock().unwrap();
