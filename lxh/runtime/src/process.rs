@@ -1,7 +1,10 @@
 use std::process::Stdio;
+use std::time::Duration;
 use tokio::process::{Child, Command};
 
 use lxh_core::LxhError;
+
+const TERMINATE_GRACE: Duration = Duration::from_secs(3);
 
 pub struct ManagedProcess {
     child: Child,
@@ -40,7 +43,32 @@ impl ManagedProcess {
         self.pid
     }
 
+    /// Terminate the process gracefully: SIGTERM first so apps release
+    /// their MIT-SHM segments and Xvfb cleans up its socket and lock file,
+    /// then SIGKILL after the grace period if it ignores the signal.
     pub async fn kill(&mut self) -> Result<(), LxhError> {
+        // tokio's Child::kill sends SIGKILL; deliver SIGTERM via the
+        // `kill` binary instead of pulling in libc/nix for one signal.
+        if self.pid > 0 {
+            let _ = tokio::process::Command::new("kill")
+                .args(["-TERM", &self.pid.to_string()])
+                .status()
+                .await;
+            let deadline = tokio::time::Instant::now() + TERMINATE_GRACE;
+            while tokio::time::Instant::now() < deadline {
+                // `kill -0` succeeds while the process is alive.
+                let alive = tokio::process::Command::new("kill")
+                    .args(["-0", &self.pid.to_string()])
+                    .status()
+                    .await
+                    .map(|s| s.success())
+                    .unwrap_or(false);
+                if !alive {
+                    return Ok(());
+                }
+                tokio::time::sleep(Duration::from_millis(50)).await;
+            }
+        }
         self.child
             .kill()
             .await
